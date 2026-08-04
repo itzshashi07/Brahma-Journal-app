@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "440787316408",
+    "project_id": "brahma-journal-nhdat",
+    "storage_bucket": "brahma-journal-nhdat.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:440787316408:android:38e64b73850e55b977ce4d",
+        "android_client_info": {
+          "package_name": "com.brahma.brahmaApp"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "440787316408-q9l212a33jths2itbqh8os417f3chuc7.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCF_dSt3E4TWndADhDVksyS0qFauI-bhuk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "440787316408-q9l212a33jths2itbqh8os417f3chuc7.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "440787316408-bn7ekl9bj06ssli4erm7ub7lej0ungup.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.brahma.brahmaApp"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

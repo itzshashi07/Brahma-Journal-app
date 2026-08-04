@@ -1,0 +1,295 @@
+import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
+import '../../providers/auth_provider.dart';
+import '../../services/affirmation_service.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/constants/app_constants.dart';
+import 'dart:math';
+
+class AffirmationsScreen extends StatefulWidget {
+  const AffirmationsScreen({super.key});
+
+  @override
+  State<AffirmationsScreen> createState() => _AffirmationsScreenState();
+}
+
+class _AffirmationsScreenState extends State<AffirmationsScreen> with SingleTickerProviderStateMixin {
+  final AffirmationService _service = AffirmationService();
+  List<String> _affirmations = [];
+  int _currentIndex = 0;
+  bool _isLoading = true;
+  bool _isSpeaking = false;
+  final TextEditingController _newAffirmCtrl = TextEditingController();
+  late AnimationController _slideCtrl;
+  late Animation<Offset> _slideAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _slideCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 400));
+    _slideAnim = Tween<Offset>(begin: const Offset(0.3, 0), end: Offset.zero).animate(
+      CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOut),
+    );
+    _loadAffirmations();
+  }
+
+  Future<void> _loadAffirmations() async {
+    final auth = context.read<AuthProvider>();
+    if (auth.user != null) {
+      final affs = await _service.getUserAffirmations(auth.user!.uid);
+      setState(() { _affirmations = affs; _isLoading = false; });
+      _slideCtrl.forward();
+    }
+  }
+
+  void _nextAffirmation() {
+    _slideCtrl.reset();
+    setState(() => _currentIndex = (_currentIndex + 1) % _affirmations.length);
+    _slideCtrl.forward();
+  }
+
+  void _prevAffirmation() {
+    _slideCtrl.reset();
+    setState(() => _currentIndex = (_currentIndex - 1 + _affirmations.length) % _affirmations.length);
+    _slideCtrl.forward();
+  }
+
+  Future<void> _addAffirmation() async {
+    final text = _newAffirmCtrl.text.trim();
+    if (text.isEmpty) return;
+    final auth = context.read<AuthProvider>();
+    final newList = [..._affirmations, text];
+    await _service.saveUserAffirmations(auth.user!.uid, newList);
+    setState(() { _affirmations = newList; _newAffirmCtrl.clear(); });
+    if (mounted) Navigator.pop(context);
+  }
+
+  void _showAddDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.bgCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Add Affirmation', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary)),
+        content: TextField(
+          controller: _newAffirmCtrl,
+          autofocus: true,
+          style: const TextStyle(color: AppTheme.textPrimary, fontFamily: 'Outfit'),
+          maxLines: 3,
+          decoration: const InputDecoration(hintText: 'I am...'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(onPressed: _addAffirmation, child: const Text('Add')),
+        ],
+      ),
+    );
+  }
+
+  List<Color> _getCardColors(int index) {
+    final colorSets = [
+      [const Color(0xFF7C3AED), const Color(0xFF4338CA)],
+      [const Color(0xFF0891B2), const Color(0xFF0E7490)],
+      [const Color(0xFF059669), const Color(0xFF047857)],
+      [const Color(0xFFD97706), const Color(0xFFB45309)],
+      [const Color(0xFFDC2626), const Color(0xFFB91C1C)],
+      [const Color(0xFF7C3AED), const Color(0xFF6D28D9)],
+    ];
+    return colorSets[index % colorSets.length];
+  }
+
+  @override
+  void dispose() {
+    _slideCtrl.dispose();
+    _newAffirmCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(gradient: AppTheme.bgGradient),
+        child: SafeArea(
+          child: Column(
+            children: [
+              // AppBar
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Row(
+                  children: [
+                    IconButton(icon: const Icon(Icons.arrow_back_ios, color: AppTheme.textPrimary, size: 20), onPressed: () => context.pop()),
+                    const Expanded(
+                      child: Text('✨ Affirmations', style: TextStyle(fontFamily: 'Outfit', fontSize: 20, fontWeight: FontWeight.w600, color: AppTheme.textPrimary), textAlign: TextAlign.center),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.add_circle_outline, color: AppTheme.primary),
+                      onPressed: _showAddDialog,
+                    ),
+                  ],
+                ),
+              ),
+
+              if (_isLoading)
+                const Expanded(child: Center(child: CircularProgressIndicator(color: AppTheme.primary)))
+              else if (_affirmations.isEmpty)
+                const Expanded(child: Center(child: Text('No affirmations yet.\nTap + to add one.', textAlign: TextAlign.center, style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textMuted))))
+              else
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      children: [
+                        // Counter
+                        Text(
+                          '${_currentIndex + 1} of ${_affirmations.length}',
+                          style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.textMuted, fontSize: 13),
+                        ),
+                        const SizedBox(height: 20),
+
+                        // Main Card
+                        Expanded(
+                          child: SlideTransition(
+                            position: _slideAnim,
+                            child: FadeTransition(
+                              opacity: _slideCtrl,
+                              child: Container(
+                                width: double.infinity,
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: _getCardColors(_currentIndex),
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                                  borderRadius: BorderRadius.circular(24),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: _getCardColors(_currentIndex)[0].withOpacity(0.4),
+                                      blurRadius: 24, spreadRadius: 4, offset: const Offset(0, 8),
+                                    ),
+                                  ],
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(32),
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      const Text('✨', style: TextStyle(fontSize: 48)),
+                                      const SizedBox(height: 24),
+                                      Text(
+                                        '"${_affirmations[_currentIndex]}"',
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                          fontFamily: 'Outfit', fontSize: 22, fontWeight: FontWeight.w600,
+                                          color: Colors.white, height: 1.5,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 24),
+
+                        // Navigation
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            _NavBtn(icon: Icons.chevron_left, onTap: _prevAffirmation),
+                            const SizedBox(width: 24),
+                            // Dots
+                            ...List.generate(
+                              _affirmations.length > 5 ? 5 : _affirmations.length,
+                              (i) {
+                                final active = i == (_currentIndex % (_affirmations.length > 5 ? 5 : _affirmations.length));
+                                return AnimatedContainer(
+                                  duration: const Duration(milliseconds: 200),
+                                  margin: const EdgeInsets.symmetric(horizontal: 3),
+                                  width: active ? 20 : 8, height: 8,
+                                  decoration: BoxDecoration(
+                                    color: active ? AppTheme.primary : AppTheme.textMuted,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                );
+                              },
+                            ),
+                            const SizedBox(width: 24),
+                            _NavBtn(icon: Icons.chevron_right, onTap: _nextAffirmation),
+                          ],
+                        ),
+
+                        const SizedBox(height: 20),
+
+                        // All Affirmations List
+                        const Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text('All Affirmations', style: TextStyle(fontFamily: 'Outfit', fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+                        ),
+                        const SizedBox(height: 12),
+                        Expanded(
+                          child: ListView.builder(
+                            itemCount: _affirmations.length,
+                            itemBuilder: (ctx, i) => GestureDetector(
+                              onTap: () {
+                                _slideCtrl.reset();
+                                setState(() => _currentIndex = i);
+                                _slideCtrl.forward();
+                              },
+                              child: Container(
+                                margin: const EdgeInsets.only(bottom: 8),
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                decoration: BoxDecoration(
+                                  color: i == _currentIndex ? AppTheme.primary.withOpacity(0.15) : AppTheme.bgCard,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: i == _currentIndex ? AppTheme.primary.withOpacity(0.4) : const Color(0xFF2D2D4E),
+                                  ),
+                                ),
+                                child: Text(
+                                  _affirmations[i],
+                                  style: TextStyle(
+                                    fontFamily: 'Outfit', fontSize: 14,
+                                    color: i == _currentIndex ? AppTheme.primary : AppTheme.textSecondary,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NavBtn extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _NavBtn({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 48, height: 48,
+        decoration: BoxDecoration(
+          color: AppTheme.bgCard,
+          shape: BoxShape.circle,
+          border: Border.all(color: const Color(0xFF2D2D4E)),
+        ),
+        child: Icon(icon, color: AppTheme.textPrimary),
+      ),
+    );
+  }
+}
