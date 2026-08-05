@@ -5,6 +5,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/journal_provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/constants/app_constants.dart';
+import '../../core/constants/thoughts_365.dart';
 import 'dart:math';
 
 class DashboardScreen extends StatefulWidget {
@@ -34,7 +35,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    _thoughtOfDay = AppConstants.thoughtsOfDay[Random().nextInt(AppConstants.thoughtsOfDay.length)];
+    final dayOfYear = DateTime.now().difference(DateTime(DateTime.now().year, 1, 1)).inDays + 1;
+    _thoughtOfDay = Thoughts365.getThoughtForDay(dayOfYear);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadData();
     });
@@ -103,21 +105,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Namaste, $displayName',
-                              style: const TextStyle(
-                                fontFamily: 'Outfit', fontSize: 22, fontWeight: FontWeight.w700,
-                                color: AppTheme.textPrimary,
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Namaste, $displayName',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontFamily: 'Outfit', fontSize: 22, fontWeight: FontWeight.w700,
+                                  color: AppTheme.textPrimary,
+                                ),
                               ),
-                            ),
-                            Text(
-                              _getGreeting(),
-                              style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 14),
-                            ),
-                          ],
+                              Text(
+                                _getGreeting(),
+                                style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 14),
+                              ),
+                            ],
+                          ),
                         ),
                         Row(
                           children: [
@@ -233,6 +239,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         _NavCard(icon: Icons.chat_bubble_outline_outlined, title: 'Thoughts', subtitle: 'Share anonymously', route: '/thoughts', color: const Color(0xFFD97706)),
                         _NavCard(icon: Icons.people_outline, title: 'Community', subtitle: 'Fellow seekers', route: '/community', color: const Color(0xFF7C3AED)),
                         _NavCard(icon: Icons.analytics_outlined, title: 'Analytics', subtitle: 'Track progress', route: '/analytics', color: const Color(0xFFDC2626)),
+                        _NavCard(icon: Icons.article_outlined, title: 'Sanctuary', subtitle: 'Blogs & Articles', route: '/blogs', color: const Color(0xFFEC4899)),
+                        _NavCard(icon: Icons.shopping_bag_outlined, title: 'Library Store', subtitle: 'Books & Resources', route: '/products', color: const Color(0xFF10B981)),
                       ],
                     ),
                     const SizedBox(height: 80),

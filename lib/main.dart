@@ -21,6 +21,11 @@ import 'screens/analytics/analytics_screen.dart';
 import 'screens/profile/profile_screen.dart';
 import 'screens/support/support_screen.dart';
 import 'screens/onboarding/onboarding_screen.dart';
+import 'screens/blogs/blogs_screen.dart';
+import 'screens/blogs/create_blog_screen.dart';
+import 'screens/blogs/blog_detail_screen.dart';
+import 'screens/products/products_screen.dart';
+import 'screens/products/create_product_screen.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 void main() async {
@@ -40,11 +45,15 @@ class BrahmaApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => AuthProvider()),
         ChangeNotifierProvider(create: (_) => JournalProvider()),
       ],
-      child: MaterialApp.router(
-        title: 'Brahma Journal',
-        debugShowCheckedModeBanner: false,
-        theme: AppTheme.darkTheme,
-        routerConfig: _buildRouter(context),
+      child: Builder(
+        builder: (childContext) {
+          return MaterialApp.router(
+            title: 'Brahma Journal',
+            debugShowCheckedModeBanner: false,
+            theme: AppTheme.darkTheme,
+            routerConfig: _buildRouter(childContext),
+          );
+        },
       ),
     );
   }
@@ -52,6 +61,7 @@ class BrahmaApp extends StatelessWidget {
   GoRouter _buildRouter(BuildContext context) {
     return GoRouter(
       initialLocation: '/',
+      refreshListenable: context.read<AuthProvider>(),
       redirect: (ctx, state) {
         final auth = ctx.read<AuthProvider>();
         final isAuth = auth.isAuthenticated;
@@ -89,6 +99,14 @@ class BrahmaApp extends StatelessWidget {
         GoRoute(path: '/profile', builder: (ctx, _) => const ProfileScreen()),
         GoRoute(path: '/support', builder: (ctx, _) => const SupportScreen()),
         GoRoute(path: '/onboarding', builder: (ctx, _) => const OnboardingScreen()),
+        GoRoute(path: '/blogs', builder: (ctx, _) => const BlogsScreen()),
+        GoRoute(path: '/blogs/create', builder: (ctx, _) => const CreateBlogScreen()),
+        GoRoute(
+          path: '/blogs/:id',
+          builder: (ctx, state) => BlogDetailScreen(blogId: state.pathParameters['id']!),
+        ),
+        GoRoute(path: '/products', builder: (ctx, _) => const ProductsScreen()),
+        GoRoute(path: '/products/create', builder: (ctx, _) => const CreateProductScreen()),
       ],
     );
   }

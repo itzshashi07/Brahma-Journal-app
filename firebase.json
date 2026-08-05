@@ -1,1 +1,24 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"brahma-journal-nhdat","appId":"1:440787316408:android:38e64b73850e55b977ce4d","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"brahma-journal-nhdat","configurations":{"android":"1:440787316408:android:38e64b73850e55b977ce4d"}}}}}}
+{
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "brahma-journal-nhdat",
+          "appId": "1:440787316408:android:38e64b73850e55b977ce4d",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "brahma-journal-nhdat",
+          "configurations": {
+            "android": "1:440787316408:android:38e64b73850e55b977ce4d"
+          }
+        }
+      }
+    }
+  }
+}

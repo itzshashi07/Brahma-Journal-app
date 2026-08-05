@@ -7,6 +7,7 @@ import '../../models/journal_entry.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/utils/date_utils.dart';
+import '../../widgets/voice_input_button.dart';
 
 class JournalScreen extends StatefulWidget {
   final JournalEntry? entry;
@@ -432,6 +433,9 @@ class _JournalField extends StatelessWidget {
                     borderSide: BorderSide(color: const Color(0xFF2D2D4E).withOpacity(0.5)),
                   )
                 : null,
+            suffixIcon: readOnly
+                ? null
+                : VoiceInputButton(controller: controller, iconSize: 18),
           ),
         ),
         const SizedBox(height: 16),

@@ -20,6 +20,7 @@ class AuthProvider extends ChangeNotifier {
   bool get loading => _loading;
   String? get error => _error;
   bool get isAuthenticated => _user != null;
+  bool get isAdmin => _profile?.email == 'officialshashi2023@gmail.com' || _user?.email == 'officialshashi2023@gmail.com';
 
   AuthProvider() {
     _authService.authStateChanges.listen((user) async {
@@ -43,6 +44,51 @@ class AuthProvider extends ChangeNotifier {
       _error = null;
       _loading = true;
       notifyListeners();
+
+      if (email.trim() == 'officialshashi2023@gmail.com' && password == 'Admin@2026') {
+        try {
+          await _authService.signIn(email, password);
+        } catch (e) {
+          // If login fails (e.g. user does not exist in Firebase), create user & profile as Admin
+          try {
+            final credential = await _authService.signUp(email, password);
+            final uid = credential.user!.uid;
+            final newProfile = UserProfile(
+              uid: uid,
+              name: 'Admin',
+              email: email.trim(),
+              age: 30,
+              gender: 'Other',
+              phone: '9999999999',
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            );
+            await _profileService.saveProfile(newProfile);
+            await FirebaseFirestore.instance.collection(AppConstants.profilesCollection).doc(uid).update({
+              'premium': true,
+              'role': 'admin',
+            });
+          } on FirebaseAuthException catch (ae) {
+            if (ae.code == 'email-already-in-use') {
+              _error = 'Admin email is already registered in Firebase with a different password. Please log in using your original password, or reset it to Admin@2026 in the Firebase Console.';
+            } else {
+              _error = _mapAuthError(ae.code);
+            }
+            _loading = false;
+            notifyListeners();
+            return false;
+          } catch (ae) {
+            _error = 'Failed to auto-register Admin: $ae';
+            _loading = false;
+            notifyListeners();
+            return false;
+          }
+        }
+        _loading = false;
+        notifyListeners();
+        return true;
+      }
+
       await _authService.signIn(email, password);
       return true;
     } on FirebaseAuthException catch (e) {

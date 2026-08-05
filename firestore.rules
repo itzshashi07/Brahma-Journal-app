@@ -1,0 +1,109 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper: check if request is from the admin email
+    function isAdmin() {
+      return isAuthenticated() &&
+        request.auth.token.email == 'officialshashi2023@gmail.com';
+    }
+
+    // Profiles Collection
+    match /profiles/{uid} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+    }
+
+    // Journal Entries Collection
+    match /entries/{entryId} {
+      allow read, write: if isAuthenticated() &&
+        (resource == null ||
+         resource.data.uid == request.auth.uid ||
+         request.resource.data.uid == request.auth.uid);
+    }
+
+    // User Affirmations Collection
+    match /user_affirmations/{uid} {
+      allow read, write: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+    }
+
+    // Affirmation Sessions Collection
+    match /affirmation_sessions/{sessionId} {
+      allow create: if isAuthenticated();
+      allow read, write: if isAuthenticated() &&
+        (resource == null ||
+         resource.data.uid == request.auth.uid ||
+         request.resource.data.uid == request.auth.uid);
+    }
+
+    // Affirmation Progress Collection
+    match /affirmation_progress/{progressId} {
+      allow read, write: if isAuthenticated() &&
+        (resource == null ||
+         resource.data.uid == request.auth.uid ||
+         request.resource.data.uid == request.auth.uid);
+    }
+
+    // Meditation Sessions Collection
+    match /meditation_sessions/{sessionId} {
+      allow create: if isAuthenticated();
+      allow read, write: if isAuthenticated() &&
+        (resource == null ||
+         resource.data.uid == request.auth.uid ||
+         request.resource.data.uid == request.auth.uid);
+    }
+
+    // Anonymous Thoughts Collection
+    match /anonymous_thoughts/{thoughtId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() &&
+        (resource.data.uid == request.auth.uid || isAdmin());
+    }
+
+    // Blogs Collection
+    match /blogs/{blogId} {
+      // Anyone (logged in or not) can read blogs
+      allow read: if true;
+
+      // Only admin can create or delete blogs
+      allow create, delete: if isAdmin();
+
+      // Admin can update anything. Authenticated users can ONLY update the 'likes' and 'sharesCount' fields.
+      allow update: if isAdmin() ||
+        (isAuthenticated() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes', 'sharesCount']));
+
+      // Nested Comments inside Blogs
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if isAuthenticated();
+        allow update, delete: if isAuthenticated() &&
+          (resource.data.uid == request.auth.uid || isAdmin());
+      }
+    }
+
+    // Products (Books/Library Store) — Admin writes, everyone reads
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Purchases — created after successful payment; users read their own
+    match /purchases/{purchaseId} {
+      // User can read their own purchase records; admin sees all
+      allow read: if isAuthenticated() &&
+        (resource.data.userId == request.auth.uid || isAdmin());
+      // Any authenticated user can create a purchase (after Razorpay success)
+      allow create: if isAuthenticated() &&
+        request.resource.data.userId == request.auth.uid;
+      // Purchase records are immutable — no update/delete
+      allow update, delete: if isAdmin();
+    }
+  }
+}
