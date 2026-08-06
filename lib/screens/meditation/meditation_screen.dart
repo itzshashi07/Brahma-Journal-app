@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
+import 'package:just_audio/just_audio.dart';
 import 'dart:async';
 import 'dart:math';
 import '../../providers/auth_provider.dart';
@@ -19,21 +20,55 @@ class MeditationScreen extends StatefulWidget {
 class _MeditationScreenState extends State<MeditationScreen> with TickerProviderStateMixin {
   final MeditationService _service = MeditationService();
   int _selectedDuration = 5;
-  int _timeLeft = 5 * 60;
   bool _isActive = false;
   bool _isCompleted = false;
   int _currentMantra = 0;
   Timer? _timer;
   late AnimationController _pulseCtrl;
   late Animation<double> _pulseAnim;
+  late AudioPlayer _audioPlayer;
+
+  /// Elapsed time is measured against the wall clock, not by counting timer
+  /// ticks. Timer.periodic is throttled or suspended whenever the app is
+  /// backgrounded or the screen locks, so tick-counting under-reported real
+  /// meditation time — a 10 minute session logged as 6.
+  int _accumulatedSeconds = 0; // finished run segments in this session
+  DateTime? _segmentStartedAt; // when the current run segment began
+  int _savedSeconds = 0; // already written to Firestore for this session
+  int _lastMantraSecond = -1;
+  String? _uid;
 
   final List<Map<String, String>> _sounds = [
-    {'id': 'nature', 'name': 'Forest Sounds'},
-    {'id': 'tibetan', 'name': 'Tibetan Bowls'},
-    {'id': 'ocean', 'name': 'Ocean Waves'},
-    {'id': 'flute', 'name': 'Peaceful Flute'},
-    {'id': 'chimes', 'name': 'Wind Chimes'},
-    {'id': 'silence', 'name': 'Silence'},
+    {
+      'id': 'nature',
+      'name': 'Forest Sounds',
+      'url': 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3'
+    },
+    {
+      'id': 'tibetan',
+      'name': 'Tibetan Bowls',
+      'url': 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3'
+    },
+    {
+      'id': 'ocean',
+      'name': 'Ocean Waves',
+      'url': 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3'
+    },
+    {
+      'id': 'flute',
+      'name': 'Peaceful Flute',
+      'url': 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3'
+    },
+    {
+      'id': 'chimes',
+      'name': 'Wind Chimes',
+      'url': 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3'
+    },
+    {
+      'id': 'silence',
+      'name': 'Silence',
+      'url': ''
+    },
   ];
   String _selectedSound = 'nature';
 
@@ -44,59 +79,167 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
     _pulseAnim = Tween<double>(begin: 0.95, end: 1.05).animate(
       CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
     );
+    _audioPlayer = AudioPlayer();
+    _audioPlayer.setLoopMode(LoopMode.one).catchError((_) {});
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Cached here because dispose() must not touch the widget tree's context.
+    _uid = context.read<AuthProvider>().user?.uid;
+  }
+
+  int get _totalSeconds => _selectedDuration * 60;
+
+  /// Real seconds meditated in this session, pauses excluded.
+  int get _elapsedSeconds {
+    final start = _segmentStartedAt;
+    final running = start == null ? 0 : DateTime.now().difference(start).inSeconds;
+    final elapsed = _accumulatedSeconds + running;
+    return elapsed > _totalSeconds ? _totalSeconds : elapsed;
+  }
+
+  int get _timeLeft {
+    final left = _totalSeconds - _elapsedSeconds;
+    return left < 0 ? 0 : left;
+  }
+
+  Future<void> _changeSound(String soundId) async {
+    setState(() => _selectedSound = soundId);
+    if (_isActive) {
+      await _playSelectedSound();
+    }
+  }
+
+  Future<void> _playSelectedSound() async {
+    final soundObj = _sounds.firstWhere((s) => s['id'] == _selectedSound);
+    final url = soundObj['url'] ?? '';
+    if (url.isNotEmpty) {
+      try {
+        await _audioPlayer.setUrl(url);
+        if (_isActive) {
+          _audioPlayer.play();
+        }
+      } catch (e) {
+        print('❌ Audio player error: $e');
+      }
+    } else {
+      await _audioPlayer.stop();
+    }
+  }
+
+  /// Play/pause button. A finished session starts a fresh one.
+  void _onPrimaryTap() {
+    if (_isActive) {
+      _pauseTimer();
+    } else {
+      if (_isCompleted) _resetTimer();
+      _startTimer();
+    }
   }
 
   void _startTimer() {
-    setState(() { _isActive = true; _isCompleted = false; });
+    if (_isActive) return;
+    setState(() {
+      _isActive = true;
+      _isCompleted = false;
+      _segmentStartedAt = DateTime.now();
+    });
     _pulseCtrl.repeat(reverse: true);
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_timeLeft <= 0) {
+    _playSelectedSound();
+
+    // Ticks only drive the display; the numbers come from the wall clock, so a
+    // dropped tick costs nothing.
+    _timer = Timer.periodic(const Duration(milliseconds: 250), (timer) {
+      if (!mounted) {
         timer.cancel();
-        _pulseCtrl.stop();
-        setState(() { _isActive = false; _isCompleted = true; });
-        _saveSession();
-        _rotateMantra();
+        return;
+      }
+      if (_timeLeft <= 0) {
+        _completeSession();
       } else {
-        setState(() { _timeLeft--; });
-        if (_timeLeft % 10 == 0) _rotateMantra();
+        setState(() {});
+        // Guarded on the second, not the tick: four ticks land in the same
+        // second and would otherwise flip the mantra four times.
+        final elapsed = _elapsedSeconds;
+        if (elapsed > 0 && elapsed % 15 == 0 && elapsed != _lastMantraSecond) {
+          _lastMantraSecond = elapsed;
+          _rotateMantra();
+        }
       }
     });
+  }
+
+  void _completeSession() {
+    _timer?.cancel();
+    _pulseCtrl.stop();
+    _audioPlayer.stop();
+    _accumulatedSeconds = _totalSeconds;
+    _segmentStartedAt = null;
+    setState(() {
+      _isActive = false;
+      _isCompleted = true;
+    });
+    _saveSession();
+    _rotateMantra();
   }
 
   void _pauseTimer() {
     _timer?.cancel();
     _pulseCtrl.stop();
-    setState(() => _isActive = false);
+    _audioPlayer.pause();
+    setState(() {
+      _accumulatedSeconds = _elapsedSeconds;
+      _segmentStartedAt = null;
+      _isActive = false;
+    });
+    _saveSession();
   }
 
   void _resetTimer() {
     _timer?.cancel();
     _pulseCtrl.stop();
     _pulseCtrl.reset();
+    _audioPlayer.stop();
+    _saveSession(); // bank whatever was meditated before clearing it
     setState(() {
       _isActive = false;
       _isCompleted = false;
-      _timeLeft = _selectedDuration * 60;
+      _accumulatedSeconds = 0;
+      _segmentStartedAt = null;
+      _savedSeconds = 0;
     });
   }
 
   void _rotateMantra() {
+    if (!mounted) return;
     setState(() {
       _currentMantra = Random().nextInt(AppConstants.mantras.length);
     });
   }
 
+  /// Persists only the part of this session that has not been stored yet, so
+  /// pausing twice does not log the same minutes twice.
   Future<void> _saveSession() async {
-    final auth = context.read<AuthProvider>();
-    if (auth.user != null) {
-      await _service.saveSession(auth.user!.uid, _selectedDuration);
-    }
+    final uid = _uid;
+    final pending = _elapsedSeconds - _savedSeconds;
+    if (uid == null || pending <= 0) return;
+    _savedSeconds += pending;
+    final saved = await _service.saveSession(uid, pending);
+    if (!saved) _savedSeconds -= pending; // let a later attempt retry it
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    // Bank the in-progress segment before tearing down; saveSession() writes
+    // through the Firestore SDK, which completes the write after disposal.
+    _accumulatedSeconds = _elapsedSeconds;
+    _segmentStartedAt = null;
+    _saveSession();
     _pulseCtrl.dispose();
+    _audioPlayer.dispose();
     super.dispose();
   }
 
@@ -234,9 +377,12 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
                             return Expanded(
                               child: GestureDetector(
                                 onTap: () {
+                                  _saveSession(); // keep any time already sat
                                   setState(() {
                                     _selectedDuration = d;
-                                    _timeLeft = d * 60;
+                                    _accumulatedSeconds = 0;
+                                    _segmentStartedAt = null;
+                                    _savedSeconds = 0;
                                   });
                                 },
                                 child: AnimatedContainer(
@@ -274,7 +420,7 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
                           children: _sounds.map((s) {
                             final isSelected = _selectedSound == s['id'];
                             return GestureDetector(
-                              onTap: () => setState(() => _selectedSound = s['id']!),
+                              onTap: () => _changeSound(s['id']!),
                               child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                                 decoration: BoxDecoration(
@@ -302,7 +448,7 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          if (_isActive || _timeLeft < _selectedDuration * 60)
+                          if (_isActive || _elapsedSeconds > 0)
                             _ControlButton(
                               icon: Icons.refresh,
                               label: 'Reset',
@@ -311,7 +457,7 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
                             ),
                           const SizedBox(width: 20),
                           GestureDetector(
-                            onTap: _isActive ? _pauseTimer : _startTimer,
+                            onTap: _onPrimaryTap,
                             child: Container(
                               width: 72, height: 72,
                               decoration: BoxDecoration(
@@ -320,7 +466,7 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
                                 boxShadow: [BoxShadow(color: AppTheme.primary.withOpacity(0.4), blurRadius: 20, spreadRadius: 4)],
                               ),
                               child: Icon(
-                                _isCompleted ? Icons.check : (_isActive ? Icons.pause : Icons.play_arrow),
+                                _isCompleted ? Icons.replay : (_isActive ? Icons.pause : Icons.play_arrow),
                                 color: Colors.white, size: 36,
                               ),
                             ),
@@ -337,13 +483,16 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
                             borderRadius: BorderRadius.circular(14),
                             border: Border.all(color: const Color(0xFF10B981).withOpacity(0.3)),
                           ),
-                          child: const Column(
+                          child: Column(
                             children: [
-                              Text('🎉', style: TextStyle(fontSize: 32)),
-                              SizedBox(height: 8),
-                              Text('Session Complete!', style: TextStyle(fontFamily: 'Outfit', fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF10B981))),
-                              SizedBox(height: 4),
-                              Text('Your meditation session has been saved.', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 13)),
+                              const Text('🎉', style: TextStyle(fontSize: 32)),
+                              const SizedBox(height: 8),
+                              const Text('Session Complete!', style: TextStyle(fontFamily: 'Outfit', fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF10B981))),
+                              const SizedBox(height: 4),
+                              Text(
+                                '$_selectedDuration min saved to your practice.',
+                                style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 13),
+                              ),
                             ],
                           ),
                         ),

@@ -1,0 +1,13 @@
+<!-- Namaste — hands joined in greeting. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <g stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M50 16 C 42 30, 36 46, 36 58 C 36 68, 42 74, 50 76"/>
+    <path d="M50 16 C 58 30, 64 46, 64 58 C 64 68, 58 74, 50 76"/>
+    <path d="M50 24 V72" opacity="0.45" stroke-width="2"/>
+    <!-- wrists -->
+    <path d="M38 68 C 34 74, 34 80, 38 86"/>
+    <path d="M62 68 C 66 74, 66 80, 62 86"/>
+    <!-- light above -->
+    <circle cx="50" cy="9" r="3.4" fill="white" stroke="none" opacity="0.85"/>
+  </g>
+</svg>

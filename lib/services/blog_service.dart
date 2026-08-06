@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../models/blog_post.dart';
+import 'notification_service.dart';
 
 class BlogService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -33,6 +35,19 @@ class BlogService {
       createdAt: DateTime.now(),
     );
     await docRef.set(post.toMap());
+
+    // Trigger local push notification
+    await NotificationService().sendNotification(
+      title: 'New Spiritual Post 🕉️',
+      body: '"$title" by $authorName has been added to Sanctuary!',
+      type: 'blog',
+      route: '/blogs/${docRef.id}',
+    );
+  }
+
+  // Delete a blog post
+  Future<void> deleteBlog(String blogId) async {
+    await _firestore.collection(_collectionPath).doc(blogId).delete();
   }
 
   // Toggle like
@@ -80,6 +95,9 @@ class BlogService {
 
     final comment = BlogComment(
       id: commentRef.id,
+      // Taken from the signed-in session, never from the caller: the rule
+      // compares it against request.auth.uid, so a forged value is rejected.
+      uid: FirebaseAuth.instance.currentUser?.uid ?? '',
       authorName: authorName,
       authorEmail: authorEmail,
       content: content,

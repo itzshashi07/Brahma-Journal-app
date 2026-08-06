@@ -1,0 +1,17 @@
+<!-- Diya — the lamp lit at the start of practice. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <g stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <!-- flame -->
+    <path d="M50 20 C 58 30, 60 38, 55 44 C 52 47, 48 47, 45 44 C 40 38, 42 30, 50 20 Z"
+          fill="white" stroke="none"/>
+    <path d="M50 32 C 53 37, 53 41, 50 44 C 47 41, 47 37, 50 32 Z"
+          fill="white" opacity="0.45" stroke="none"/>
+    <!-- wick + bowl -->
+    <path d="M50 47 V54"/>
+    <path d="M24 56 C 30 70, 70 70, 76 56 Z" fill="white" stroke="none" opacity="0.92"/>
+    <path d="M20 56 H80" stroke-width="3.4"/>
+    <!-- glow -->
+    <path d="M18 44 C 14 34, 16 26, 20 22" opacity="0.35" stroke-width="2"/>
+    <path d="M82 44 C 86 34, 84 26, 80 22" opacity="0.35" stroke-width="2"/>
+  </g>
+</svg>

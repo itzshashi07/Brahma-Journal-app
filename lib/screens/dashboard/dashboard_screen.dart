@@ -6,7 +6,16 @@ import '../../providers/journal_provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/constants/thoughts_365.dart';
+import '../../widgets/sacred.dart';
+import '../../widgets/free_access.dart';
+import '../../widgets/update_dialog.dart';
+import '../../widgets/profile_avatar.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:async';
 import 'dart:math';
+import '../../services/app_update_service.dart';
+import '../../services/profile_service.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -20,6 +29,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _showChatbot = false;
   final TextEditingController _chatCtrl = TextEditingController();
   final ScrollController _chatScrollCtrl = ScrollController();
+  StreamSubscription? _thoughtSubscription;
 
   final List<Map<String, dynamic>> _messages = [
     {
@@ -35,10 +45,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    final dayOfYear = DateTime.now().difference(DateTime(DateTime.now().year, 1, 1)).inDays + 1;
-    _thoughtOfDay = Thoughts365.getThoughtForDay(dayOfYear);
+    _listenToThought();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadData();
+    });
+  }
+
+  void _listenToThought() {
+    _thoughtSubscription = FirebaseFirestore.instance
+        .collection('metadata')
+        .doc('thought_of_the_day')
+        .snapshots()
+        .listen((snapshot) {
+      if (snapshot.exists) {
+        final data = snapshot.data();
+        if (data != null && data['text'] != null) {
+          setState(() {
+            _thoughtOfDay = data['text'];
+          });
+        }
+      } else {
+        final dayOfYear = DateTime.now().difference(DateTime(DateTime.now().year, 1, 1)).inDays + 1;
+        setState(() {
+          _thoughtOfDay = Thoughts365.getThoughtForDay(dayOfYear);
+        });
+      }
     });
   }
 
@@ -46,6 +77,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final auth = context.read<AuthProvider>();
     if (auth.user != null) {
       await context.read<JournalProvider>().loadEntries(auth.user!.uid);
+      // Automatically sync profile stats on launch to fix any Firestore mismatches
+      ProfileService().syncProfileStats(auth.user!.uid);
+    }
+    // Check for app update
+    _checkForUpdate();
+  }
+
+  /// Silent on launch unless there is genuinely something to install — an
+  /// update check that interrupts to say "nothing to do" trains people to
+  /// dismiss it without reading.
+  Future<void> _checkForUpdate() async {
+    final release = await AppUpdateService.checkForUpdate();
+    if (release != null && mounted) {
+      UpdateDialog.show(context, release);
     }
   }
 
@@ -80,7 +125,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void dispose() {
     _chatCtrl.dispose();
     _chatScrollCtrl.dispose();
+    _thoughtSubscription?.cancel();
     super.dispose();
+  }
+
+  void _showEditThoughtDialog() {
+    final controller = TextEditingController(text: _thoughtOfDay);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.bgCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Update Thought of the Day', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 4,
+          style: const TextStyle(color: AppTheme.textPrimary, fontFamily: 'Outfit'),
+          decoration: const InputDecoration(hintText: 'Type custom thought...'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              final text = controller.text.trim();
+              if (text.isNotEmpty) {
+                await FirebaseFirestore.instance.collection('metadata').doc('thought_of_the_day').set({
+                  'text': text,
+                  'updatedAt': FieldValue.serverTimestamp(),
+                });
+                if (mounted) Navigator.pop(ctx);
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -91,8 +172,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final displayName = profile?.displayName ?? auth.user?.email?.split('@').first ?? 'Soul';
 
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(gradient: AppTheme.bgGradient),
+      body: SacredBackdrop(
         child: SafeArea(
           child: Stack(
             children: [
@@ -114,13 +194,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
-                                  fontFamily: 'Outfit', fontSize: 22, fontWeight: FontWeight.w700,
+                                  fontFamily: 'Outfit', fontSize: 26, fontWeight: FontWeight.w800,
                                   color: AppTheme.textPrimary,
                                 ),
                               ),
                               Text(
                                 _getGreeting(),
-                                style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 14),
+                                style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 16),
                               ),
                             ],
                           ),
@@ -128,21 +208,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         Row(
                           children: [
                             IconButton(
+                              icon: const Icon(Icons.share_outlined, color: AppTheme.textSecondary),
+                              onPressed: () => AppUpdateService.shareApp(),
+                            ),
+                            const SizedBox(width: 2),
+                            IconButton(
+                              icon: const Icon(Icons.notifications_none_outlined, color: AppTheme.textSecondary),
+                              onPressed: () => context.push('/notifications'),
+                            ),
+                            const SizedBox(width: 2),
+                            IconButton(
                               icon: const Icon(Icons.help_outline_outlined, color: AppTheme.textSecondary),
                               onPressed: () => context.push('/support'),
                             ),
                             const SizedBox(width: 8),
                             GestureDetector(
                               onTap: () => context.push('/profile'),
-                              child: CircleAvatar(
-                                radius: 22,
-                                backgroundColor: AppTheme.primary.withOpacity(0.2),
-                                child: Text(
-                                  profile?.initials ?? 'S',
-                                  style: const TextStyle(
-                                    fontFamily: 'Outfit', color: AppTheme.primary, fontWeight: FontWeight.w700,
-                                  ),
-                                ),
+                              child: ProfileAvatar(
+                                avatarId: profile?.avatarId,
+                                initials: profile?.initials ?? 'S',
+                                size: 44,
+                                showRing: true,
                               ),
                             ),
                           ],
@@ -176,6 +262,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     const SizedBox(height: 20),
 
+                    // Free-access countdown — the offer is the headline while
+                    // billing is switched off, so it sits above the fold.
+                    const FreeAccessBanner(),
+                    const SizedBox(height: 20),
+
                     // Thought of the Day
                     Container(
                       padding: const EdgeInsets.all(18),
@@ -190,24 +281,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Row(
+                          Row(
                             children: [
-                              Icon(Icons.lightbulb_outline, size: 18, color: Colors.white),
-                              SizedBox(width: 8),
-                              Text(
+                              const Icon(Icons.lightbulb_outline, size: 18, color: Colors.white),
+                              const SizedBox(width: 8),
+                              const Text(
                                 'Thought of the Day',
                                 style: TextStyle(
-                                  fontFamily: 'Outfit', fontSize: 13, fontWeight: FontWeight.w600,
-                                  color: Colors.white70,
+                                  fontFamily: 'Outfit', fontSize: 15, fontWeight: FontWeight.w700,
+                                  color: Colors.white,
                                 ),
                               ),
+                              const Spacer(),
+                              if (auth.isAdmin) ...[
+                                GestureDetector(
+                                  onTap: _showEditThoughtDialog,
+                                  child: const Icon(Icons.edit_outlined, size: 18, color: Colors.white70),
+                                ),
+                              ],
                             ],
                           ),
                           const SizedBox(height: 10),
                           Text(
                             '"$_thoughtOfDay"',
                             style: const TextStyle(
-                              fontFamily: 'Outfit', fontSize: 15, color: Colors.white,
+                              fontFamily: 'Outfit', fontSize: 17, color: Colors.white,
                               fontStyle: FontStyle.italic, height: 1.5,
                             ),
                           ),
@@ -220,7 +318,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     const Text(
                       'Your Journey',
                       style: TextStyle(
-                        fontFamily: 'Outfit', fontSize: 18, fontWeight: FontWeight.w600,
+                        fontFamily: 'Outfit', fontSize: 21, fontWeight: FontWeight.w700,
                         color: AppTheme.textPrimary,
                       ),
                     ),
@@ -243,7 +341,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         _NavCard(icon: Icons.shopping_bag_outlined, title: 'Library Store', subtitle: 'Books & Resources', route: '/products', color: const Color(0xFF10B981)),
                       ],
                     ),
-                    const SizedBox(height: 80),
+                    const SizedBox(height: 40),
                   ],
                 ),
               ),
@@ -281,126 +379,258 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  Future<void> _launchWhatsApp() async {
+    final Uri url = Uri.parse('https://wa.me/918078633912');
+    try {
+      if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+        throw 'Could not launch WhatsApp';
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open WhatsApp: $e', style: const TextStyle(fontFamily: 'Outfit')), backgroundColor: Colors.redAccent),
+        );
+      }
+    }
+  }
+
   Widget _buildChatbotModal() {
     return Positioned.fill(
       child: GestureDetector(
         onTap: () => setState(() => _showChatbot = false),
         child: Container(
-          color: Colors.black54,
+          color: Colors.black.withOpacity(0.7),
           child: Align(
             alignment: Alignment.bottomCenter,
             child: GestureDetector(
               onTap: () {},
               child: Container(
-                height: MediaQuery.of(context).size.height * 0.65,
+                height: MediaQuery.of(context).size.height * 0.75,
                 decoration: const BoxDecoration(
                   color: AppTheme.bgCard,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+                  border: Border(top: BorderSide(color: Color(0xFF2D2D4E), width: 1.5)),
                 ),
-                child: Column(
-                  children: [
-                    // Handle
-                    const SizedBox(height: 12),
-                    Container(width: 40, height: 4, decoration: BoxDecoration(color: AppTheme.textMuted, borderRadius: BorderRadius.circular(2))),
-                    const SizedBox(height: 16),
-                    // Header
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 40, height: 40,
-                            decoration: BoxDecoration(gradient: AppTheme.primaryGradient, shape: BoxShape.circle),
-                            child: const Center(child: Text('🤖', style: TextStyle(fontSize: 20))),
-                          ),
-                          const SizedBox(width: 12),
-                          const Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                child: ClipRRect(
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+                  child: Scaffold(
+                    backgroundColor: Colors.transparent,
+                    body: Column(
+                      children: [
+                        // Drag Handle
+                        const SizedBox(height: 12),
+                        Container(width: 40, height: 4, decoration: BoxDecoration(color: AppTheme.textMuted, borderRadius: BorderRadius.circular(2))),
+                        const SizedBox(height: 16),
+                        
+                        // Header
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          child: Row(
                             children: [
-                              Text('AI Spiritual Counselor', style: TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
-                              Text('Here to guide your journey', style: TextStyle(fontFamily: 'Outfit', fontSize: 12, color: AppTheme.textMuted)),
+                              Container(
+                                width: 44, height: 44,
+                                decoration: BoxDecoration(
+                                  gradient: AppTheme.primaryGradient, 
+                                  shape: BoxShape.circle,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: AppTheme.primary.withOpacity(0.3),
+                                      blurRadius: 8,
+                                    )
+                                  ]
+                                ),
+                                child: const Center(child: Text('🤖', style: TextStyle(fontSize: 22))),
+                              ),
+                              const SizedBox(width: 12),
+                              const Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('Brahma AI Coach', style: TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.w700, fontSize: 17, color: AppTheme.textPrimary)),
+                                  Text('Psychological Analysis', style: TextStyle(fontFamily: 'Outfit', fontSize: 12, color: AppTheme.textMuted)),
+                                ],
+                              ),
+                              const Spacer(),
+                              IconButton(
+                                icon: const Icon(Icons.close, color: AppTheme.textMuted),
+                                onPressed: () => setState(() => _showChatbot = false),
+                              ),
                             ],
                           ),
-                          const Spacer(),
-                          IconButton(
-                            icon: const Icon(Icons.close, color: AppTheme.textMuted),
-                            onPressed: () => setState(() => _showChatbot = false),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Divider(color: Color(0xFF2D2D4E)),
-                    // Messages
-                    Expanded(
-                      child: ListView.builder(
-                        controller: _chatScrollCtrl,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        itemCount: _messages.length,
-                        itemBuilder: (ctx, i) {
-                          final msg = _messages[i];
-                          final isBot = msg['type'] == 'bot';
-                          return Align(
-                            alignment: isBot ? Alignment.centerLeft : Alignment.centerRight,
-                            child: Container(
-                              margin: const EdgeInsets.only(bottom: 10),
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                              constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
-                              decoration: BoxDecoration(
-                                color: isBot ? AppTheme.bgCardLight : AppTheme.primary,
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: Text(
-                                msg['message'],
-                                style: TextStyle(
-                                  fontFamily: 'Outfit', fontSize: 14,
-                                  color: isBot ? AppTheme.textPrimary : Colors.white,
+                        ),
+                        const Divider(color: Color(0xFF2D2D4E), height: 24),
+                        
+                        // Main Scroll Content
+                        Expanded(
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Coming Soon Banner
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF4338CA).withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(color: const Color(0xFF4338CA).withOpacity(0.3)),
+                                  ),
+                                  child: const Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '🚀 Feature Coming Soon / Under Development',
+                                        style: TextStyle(fontFamily: 'Outfit', color: Color(0xFF818CF8), fontSize: 14, fontWeight: FontWeight.bold),
+                                      ),
+                                      SizedBox(height: 6),
+                                      Text(
+                                        'This is an advanced feature which is currently under development. In the future, Brahma AI will analyze your conversation like a real psychiatrist to help track emotional patterns.',
+                                        style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 12, height: 1.4),
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                    // Input
-                    Padding(
-                      padding: EdgeInsets.only(
-                        left: 16, right: 16, bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _chatCtrl,
-                              style: const TextStyle(color: AppTheme.textPrimary, fontFamily: 'Outfit'),
-                              decoration: InputDecoration(
-                                hintText: 'Share your thoughts...',
-                                hintStyle: const TextStyle(color: AppTheme.textMuted, fontFamily: 'Outfit'),
-                                filled: true,
-                                fillColor: AppTheme.bgCardLight,
-                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                              ),
-                              onSubmitted: (_) => _sendMessage(),
+                                const SizedBox(height: 20),
+
+                                // Consultation Info Card
+                                const Text(
+                                  'Urgent Session Needed?',
+                                  style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary, fontSize: 16, fontWeight: FontWeight.bold),
+                                ),
+                                const SizedBox(height: 6),
+                                const Text(
+                                  'If you need an urgent session, you can book a 1-to-1 consultation with a qualified mental health psychiatrist right now.',
+                                  style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 13),
+                                ),
+                                const SizedBox(height: 16),
+
+                                Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.bgCardLight,
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(color: const Color(0xFF2D2D4E)),
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          const Text(
+                                            'Session Fee',
+                                            style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 14),
+                                          ),
+                                          Text(
+                                            '₹299 / session',
+                                            style: TextStyle(fontFamily: 'Outfit', color: AppTheme.accent, fontSize: 15, fontWeight: FontWeight.bold),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 8),
+                                      const Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Text(
+                                            'Duration',
+                                            style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 14),
+                                          ),
+                                          Text(
+                                            '30 Minutes',
+                                            style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.bold),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 12),
+                                      const Divider(color: Color(0xFF2D2D4E)),
+                                      const SizedBox(height: 8),
+                                      const Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(
+                                          'In the session, we provide:',
+                                          style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary, fontSize: 13, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      _buildBulletPoint('One-to-one confidential consultation with a qualified mental health professional.'),
+                                      _buildBulletPoint('Personalized emotional assessment based on your concerns and current situation.'),
+                                      _buildBulletPoint('Practical coping strategies for stress, anxiety, overthinking, relationship issues, and emotional well-being.'),
+                                      _buildBulletPoint('Guidance on improving mental wellness with actionable daily practices.'),
+                                      _buildBulletPoint('Opportunity to ask questions and receive personalized recommendations.'),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 24),
+                                
+                                // Booking Buttons
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: OutlinedButton(
+                                        onPressed: () {
+                                          setState(() => _showChatbot = false);
+                                          context.push('/support');
+                                        },
+                                        style: OutlinedButton.styleFrom(
+                                          side: const BorderSide(color: AppTheme.primary),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                          padding: const EdgeInsets.symmetric(vertical: 14),
+                                        ),
+                                        child: const Text('Fill Form', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.primaryLight, fontSize: 14, fontWeight: FontWeight.w600)),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: ElevatedButton(
+                                        onPressed: _launchWhatsApp,
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: const Color(0xFF10B981),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                          padding: const EdgeInsets.symmetric(vertical: 14),
+                                        ),
+                                        child: const Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            Icon(Icons.chat_bubble_outline, size: 16, color: Colors.white),
+                                            SizedBox(width: 6),
+                                            Text('Connect Now', style: TextStyle(fontFamily: 'Outfit', color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 30),
+                              ],
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          GestureDetector(
-                            onTap: _sendMessage,
-                            child: Container(
-                              width: 44, height: 44,
-                              decoration: BoxDecoration(gradient: AppTheme.primaryGradient, shape: BoxShape.circle),
-                              child: const Icon(Icons.send, color: Colors.white, size: 20),
-                            ),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  static Widget _buildBulletPoint(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.check_circle_outline, color: Color(0xFF10B981), size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 12, height: 1.4),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -423,19 +653,49 @@ class _StatCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
-      decoration: BoxDecoration(
-        color: AppTheme.bgCard,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF2D2D4E)),
-      ),
+    return GlassCard(
+      radius: AppTheme.radiusMd,
+      padding: const EdgeInsets.symmetric(
+          vertical: AppTheme.space4, horizontal: AppTheme.space2),
       child: Column(
         children: [
-          Icon(icon, size: 22, color: color),
-          const SizedBox(height: 6),
-          Text(value, style: TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.w700, fontSize: 18, color: color)),
-          Text(label, style: const TextStyle(fontFamily: 'Outfit', fontSize: 11, color: AppTheme.textMuted), textAlign: TextAlign.center),
+          // Icon sits in a tinted well rather than floating loose, so the three
+          // cards read as a set instead of three unrelated glyphs.
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+            ),
+            child: Icon(icon, size: 20, color: color),
+          ),
+          const SizedBox(height: AppTheme.space3),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontFamily: 'Outfit',
+              fontWeight: FontWeight.w800,
+              fontSize: 21,
+              height: 1.1,
+              color: color,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontFamily: 'Outfit',
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: AppTheme.textMuted,
+            ),
+          ),
         ],
       ),
     );
@@ -453,29 +713,76 @@ class _NavCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return GlassCard(
       onTap: () => context.push(route),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: AppTheme.bgCard,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFF2D2D4E)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 36, height: 36,
-              decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
-              child: Center(child: Icon(icon, size: 18, color: color)),
+      padding: const EdgeInsets.all(AppTheme.space4),
+      child: Stack(
+        children: [
+          // The section's own colour bleeds in from the corner, so eight cards
+          // in a grid stay distinguishable at a glance instead of reading as
+          // one undifferentiated block.
+          Positioned(
+            right: -70,
+            top: -70,
+            child: Container(
+              width: 170,
+              height: 170,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                // Wide and low-opacity with an intermediate stop: a tight,
+                // strong radial clipped by the card corner reads as a pasted
+                // square rather than as light falling across the surface.
+                gradient: RadialGradient(
+                  colors: [
+                    color.withValues(alpha: 0.20),
+                    color.withValues(alpha: 0.06),
+                    color.withValues(alpha: 0),
+                  ],
+                  stops: const [0.0, 0.45, 1.0],
+                ),
+              ),
             ),
-            const SizedBox(height: 8),
-            Text(title, style: const TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.w600, fontSize: 14, color: AppTheme.textPrimary)),
-            Text(subtitle, style: const TextStyle(fontFamily: 'Outfit', fontSize: 11, color: AppTheme.textMuted)),
-          ],
-        ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+                  border: Border.all(color: color.withValues(alpha: 0.28)),
+                ),
+                child: Center(child: Icon(icon, size: 21, color: color)),
+              ),
+              const SizedBox(height: AppTheme.space3),
+              Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontFamily: 'Outfit',
+                  fontWeight: FontWeight.w700,
+                  fontSize: 15.5,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 1),
+              Text(
+                subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontFamily: 'Outfit',
+                  fontSize: 11.5,
+                  color: AppTheme.textMuted,
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "440787316408-s2hc78b6np07oijv51mqvaianhgmfroq.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.brahma.brahmaApp",
+            "certificate_hash": "1678d12f4d89721c8d518b214bfaae709cd7372e"
+          }
+        },
+        {
           "client_id": "440787316408-q9l212a33jths2itbqh8os417f3chuc7.apps.googleusercontent.com",
           "client_type": 3
         }

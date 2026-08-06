@@ -1,0 +1,17 @@
+<!-- Seated figure in meditation. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <g stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="50" cy="27" r="10" fill="white" stroke="none"/>
+    <!-- torso -->
+    <path d="M50 39 C 42 46, 39 56, 39 64"/>
+    <path d="M50 39 C 58 46, 61 56, 61 64"/>
+    <!-- arms resting on knees -->
+    <path d="M42 48 C 32 54, 27 62, 26 68"/>
+    <path d="M58 48 C 68 54, 73 62, 74 68"/>
+    <!-- crossed legs -->
+    <path d="M26 68 C 34 78, 66 78, 74 68" />
+    <path d="M33 72 C 42 66, 58 66, 67 72" opacity="0.7"/>
+    <!-- halo -->
+    <path d="M34 20 C 40 12, 60 12, 66 20" opacity="0.5" stroke-width="2"/>
+  </g>
+</svg>

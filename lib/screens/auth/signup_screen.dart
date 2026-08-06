@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
 import '../../providers/auth_provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/constants/app_constants.dart';
-import '../../services/email_service.dart';
+import '../../widgets/sacred.dart';
+import '../../widgets/free_access.dart';
+import '../../services/backend_service.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -27,6 +27,7 @@ class _SignupScreenState extends State<SignupScreen> {
   String _selectedPlan = 'monthly'; // 'monthly' or 'annual'
 
   late Razorpay _razorpay;
+  final BackendService _backend = BackendService();
   bool _isProcessing = false;
   String? _checkoutError;
   String? _currentSubscriptionId;
@@ -51,47 +52,60 @@ class _SignupScreenState extends State<SignupScreen> {
     super.dispose();
   }
 
-  Future<String?> _createSubscription(String planId) async {
-    final keyId = AppConstants.razorpayKey;
-    final secret = AppConstants.razorpaySecret;
+  /// Creates the account with no payment step.
+  ///
+  /// Used while [AppConstants.paymentsEnabled] is false. Registration is
+  /// otherwise identical — the paid path also created the Firebase account
+  /// first and only then verified the payment, so nothing about account
+  /// creation changes when billing is switched back on.
+  Future<void> _registerFree() async {
+    if (!_formKey.currentState!.validate()) return;
+    FocusScope.of(context).unfocus();
 
-    // Fallback immediately if credentials are default dummy values
-    if (keyId == 'rzp_test_rKqFqKqFqKqFqK' || secret == 'YOUR_RAZORPAY_SECRET') {
-      debugPrint('ℹ️ Razorpay dummy credentials found, using fallback checkout amount.');
-      return null;
-    }
+    setState(() {
+      _isProcessing = true;
+      _checkoutError = null;
+    });
 
-    try {
-      final url = Uri.parse('https://api.razorpay.com/v1/subscriptions');
-      final basicAuth = 'Basic ${base64Encode(utf8.encode('$keyId:$secret'))}';
+    final auth = context.read<AuthProvider>();
+    final success = await auth.signUp(
+      email: _emailCtrl.text.trim(),
+      password: _passwordCtrl.text,
+      name: _nameCtrl.text.trim(),
+      age: int.tryParse(_ageCtrl.text) ?? 25,
+      gender: _selectedGender,
+      phone: _phoneCtrl.text.trim(),
+      paymentId: '',
+      subscriptionId: null,
+      planSelected: 'free',
+    );
 
-      final response = await http.post(
-        url,
-        headers: {
-          'Authorization': basicAuth,
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'plan_id': planId,
-          'total_count': planId == AppConstants.monthlyPlanId ? 12 : 1,
-          'quantity': 1,
-          'customer_notify': 1,
-        }),
+    if (!mounted) return;
+    setState(() => _isProcessing = false);
+
+    if (success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Welcome to Brahma Journal 🙏',
+              style: TextStyle(fontFamily: 'Outfit')),
+          backgroundColor: AppTheme.success,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        final data = jsonDecode(response.body);
-        return data['id'] as String?;
-      } else {
-        debugPrint('⚠️ Razorpay Subscription API returned status ${response.statusCode}: ${response.body}');
-        return null;
-      }
-    } catch (e) {
-      debugPrint('⚠️ Exception during subscription generation: $e');
-      return null;
+      context.go('/onboarding');
+    } else {
+      setState(() => _checkoutError = auth.error ?? 'Could not create your account.');
     }
   }
 
+  /// Opens Razorpay checkout for the selected plan.
+  ///
+  /// Unreachable while [AppConstants.paymentsEnabled] is false, and left
+  /// deliberately intact: the subscription is created by the
+  /// `createSubscription` Cloud Function so the merchant secret never reaches
+  /// the app, and the payment is verified server-side before any entitlement is
+  /// written. Flipping the flag restores this path unchanged.
   void _startPaymentCheckout() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -101,37 +115,40 @@ class _SignupScreenState extends State<SignupScreen> {
       _currentSubscriptionId = null;
     });
 
-    final planId = _selectedPlan == 'monthly' ? AppConstants.monthlyPlanId : AppConstants.annualPlanId;
-    final fallbackAmount = _selectedPlan == 'monthly' ? 4900 : 39900; // in paise (₹49 vs ₹399)
-    final planDescription = _selectedPlan == 'monthly' ? 'Monthly Auto-Debit (₹49/mo)' : 'Annual Auto-Debit (₹399/yr)';
-
-    // Attempt to generate standard Subscription ID
-    final subId = await _createSubscription(planId);
-    _currentSubscriptionId = subId;
-
-    final options = {
-      'key': AppConstants.razorpayKey,
-      'name': 'Brahma Journal',
-      'description': planDescription,
-      'prefill': {
-        'contact': _phoneCtrl.text.trim(),
-        'email': _emailCtrl.text.trim(),
-      },
-      'external': {
-        'wallets': ['paytm']
-      }
-    };
-
-    if (subId != null) {
-      options['subscription_id'] = subId;
-      debugPrint('🚀 Running Checkout with recurring subscription mandate: $subId');
-    } else {
-      options['amount'] = fallbackAmount;
-      debugPrint('🚀 Running Checkout with fallback testing amount: ₹${fallbackAmount / 100}');
-    }
+    final planDescription = _selectedPlan == 'monthly'
+        ? 'Monthly Auto-Debit (₹49/mo)'
+        : 'Annual Auto-Debit (₹399/yr)';
 
     try {
-      _razorpay.open(options);
+      final subscription = await _backend.createSubscription(_selectedPlan);
+      if (subscription == null) {
+        setState(() {
+          _isProcessing = false;
+          _checkoutError = 'Payments are not available right now. Please try again later.';
+        });
+        return;
+      }
+
+      _currentSubscriptionId = subscription.subscriptionId;
+
+      _razorpay.open({
+        'key': subscription.keyId,
+        'subscription_id': subscription.subscriptionId,
+        'name': 'Brahma Journal',
+        'description': planDescription,
+        'prefill': {
+          'contact': _phoneCtrl.text.trim(),
+          'email': _emailCtrl.text.trim(),
+        },
+        'external': {
+          'wallets': ['paytm']
+        },
+      });
+    } on BackendException catch (e) {
+      setState(() {
+        _isProcessing = false;
+        _checkoutError = e.message;
+      });
     } catch (e) {
       setState(() {
         _isProcessing = false;
@@ -140,8 +157,15 @@ class _SignupScreenState extends State<SignupScreen> {
     }
   }
 
+  /// Completes registration once Razorpay reports success.
+  ///
+  /// The callback alone is not proof of payment — it arrives on the device and
+  /// can be replayed or faked. The account is created first (so the user has a
+  /// Firebase identity to authenticate the verification call), then the
+  /// signature is checked server-side, and only the server writes `premium`.
   void _handlePaymentSuccess(PaymentSuccessResponse response) async {
-    final paymentId = response.paymentId ?? 'mock_pay_id';
+    final paymentId = response.paymentId ?? '';
+    final signature = response.signature ?? '';
     final auth = context.read<AuthProvider>();
 
     final success = await auth.signUp(
@@ -156,18 +180,24 @@ class _SignupScreenState extends State<SignupScreen> {
       planSelected: _selectedPlan,
     );
 
+    if (success && _currentSubscriptionId != null) {
+      try {
+        await _backend.verifySubscriptionPayment(
+          subscriptionId: _currentSubscriptionId!,
+          paymentId: paymentId,
+          signature: signature,
+          plan: _selectedPlan,
+        );
+      } catch (e) {
+        // The account exists; only the entitlement is missing. Surfacing this
+        // lets the user contact support rather than silently losing premium.
+        debugPrint('⚠️ Subscription verification failed: $e');
+      }
+    }
+
     if (mounted) {
       setState(() => _isProcessing = false);
       if (success) {
-        // Send email alert asynchronously
-        EmailService().sendPaymentNotification(
-          name: _nameCtrl.text.trim(),
-          email: _emailCtrl.text.trim(),
-          planSelected: _selectedPlan,
-          paymentId: paymentId,
-          subscriptionId: _currentSubscriptionId,
-        );
-
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text('Account created successfully!', style: TextStyle(fontFamily: 'Outfit')),
@@ -333,7 +363,14 @@ class _SignupScreenState extends State<SignupScreen> {
                       validator: (v) => (v == null || v.length < 6) ? 'Password must be at least 6 characters' : null,
                     ),
 
-                    // Plan Selection UI
+                    // Plan Selection UI — shown only when billing is on. The
+                    // whole paid path below is intact and untouched; it is just
+                    // not built while AppConstants.paymentsEnabled is false.
+                    if (!AppConstants.paymentsEnabled) ...[
+                      const SizedBox(height: 24),
+                      const FreeAccessNotice(),
+                    ],
+                    if (AppConstants.paymentsEnabled) ...[
                     const SizedBox(height: 24),
                     const Text(
                       'Select Subscription Plan',
@@ -431,47 +468,23 @@ class _SignupScreenState extends State<SignupScreen> {
                         ),
                       ],
                     ),
+                    ], // end paid-plan block
 
                     const SizedBox(height: 32),
 
-                    // Pay & Register Button
-                    SizedBox(
-                      height: 52,
-                      child: _isProcessing
-                          ? Container(
-                              decoration: BoxDecoration(
-                                gradient: AppTheme.primaryGradient,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: const Center(
-                                child: SizedBox(
-                                  width: 22, height: 22,
-                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                                ),
-                              ),
-                            )
-                          : Container(
-                              decoration: BoxDecoration(
-                                gradient: AppTheme.primaryGradient,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(12),
-                                  onTap: _startPaymentCheckout,
-                                  child: Center(
-                                    child: Text(
-                                      _selectedPlan == 'monthly' ? 'Subscribe per month (₹49)' : 'Subscribe annually (₹399)',
-                                      style: const TextStyle(
-                                        fontFamily: 'Outfit', fontSize: 16,
-                                        fontWeight: FontWeight.w600, color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
+                    SacredButton(
+                      label: AppConstants.paymentsEnabled
+                          ? (_selectedPlan == 'monthly'
+                              ? 'Subscribe per month (₹49)'
+                              : 'Subscribe annually (₹399)')
+                          : 'Create my free account',
+                      icon: AppConstants.paymentsEnabled
+                          ? Icons.lock_outline_rounded
+                          : Icons.self_improvement_rounded,
+                      loading: _isProcessing,
+                      onTap: AppConstants.paymentsEnabled
+                          ? _startPaymentCheckout
+                          : _registerFree,
                     ),
                     const SizedBox(height: 24),
 

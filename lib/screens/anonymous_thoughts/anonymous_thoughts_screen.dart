@@ -30,7 +30,14 @@ class _AnonymousThoughtsScreenState extends State<AnonymousThoughtsScreen> {
   Future<void> _loadThoughts() async {
     setState(() => _isLoading = true);
     final thoughts = await _service.getAnonymousThoughts();
+    if (!mounted) return;
     setState(() { _thoughts = thoughts; _isLoading = false; });
+
+    // Clear out this member's own week-old posts in the background. Not
+    // awaited — the feed is already filtered, so this is pure housekeeping and
+    // must never make the screen feel slow.
+    final uid = context.read<AuthProvider>().user?.uid;
+    if (uid != null) _service.purgeMyExpiredThoughts(uid);
   }
 
   Future<void> _postThought() async {
@@ -211,7 +218,19 @@ class _ThoughtCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(thought.anonymousName, style: TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.w600, fontSize: 13, color: color)),
-                  Text(AppDateUtils.formatRelative(thought.createdAt), style: const TextStyle(fontFamily: 'Outfit', fontSize: 11, color: AppTheme.textMuted)),
+                  Row(
+                    children: [
+                      Text(AppDateUtils.formatRelative(thought.createdAt), style: const TextStyle(fontFamily: 'Outfit', fontSize: 11, color: AppTheme.textMuted)),
+                      const SizedBox(width: 6),
+                      // Reflections vanish after a week. Saying so on the card
+                      // sets the expectation up front — a post silently
+                      // disappearing later reads as data loss, not as a feature.
+                      Text(
+                        '· ${_expiryLabel(thought.createdAt)}',
+                        style: const TextStyle(fontFamily: 'Outfit', fontSize: 11, color: AppTheme.textMuted),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ],
@@ -258,4 +277,14 @@ class _ThoughtCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// "fades in 3 days" — how long before this reflection is removed.
+String _expiryLabel(DateTime createdAt) {
+  final goesAt = createdAt.add(CommunityService.thoughtLifetime);
+  final left = goesAt.difference(DateTime.now());
+  if (left.isNegative) return 'fading now';
+  if (left.inHours < 24) return 'fades today';
+  final days = left.inDays + 1;
+  return days == 1 ? 'fades tomorrow' : 'fades in $days days';
 }

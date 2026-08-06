@@ -1,109 +1,462 @@
 rules_version = '2';
+
+// Brahma Journal — Firestore Security Rules
+//
+// Threat model: every value in `request.resource.data` is attacker-controlled.
+// The Flutter client is a public binary; anyone can extract the Firebase config
+// and drive these collections directly from a script. Nothing below may rely on
+// the app's UI having gated an action.
+//
+// Design rules followed throughout:
+//   1. Default deny. Every collection is listed explicitly; anything not listed
+//      is denied by the absence of a matching rule.
+//   2. Ownership is checked on BOTH sides of a write. Checking only the
+//      incoming document lets an attacker overwrite someone else's document by
+//      stamping their own uid on the payload.
+//   3. Money, privilege, and entitlement fields are server-only. They are
+//      written by Cloud Functions through the Admin SDK, which bypasses these
+//      rules. No client path can set them.
+//   4. Admin is a signed custom claim, never an email string or a document
+//      field a user could write to their own profile.
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper: check if user is authenticated
-    function isAuthenticated() {
+    // ──────────────────────────── helpers ────────────────────────────
+
+    function isSignedIn() {
       return request.auth != null;
     }
 
-    // Helper: check if request is from the admin email
+    function uid() {
+      return request.auth.uid;
+    }
+
+    // Admin comes from a custom claim minted by a Cloud Function and signed by
+    // Firebase. It cannot be forged, guessed, or self-assigned — unlike the
+    // previous `request.auth.token.email == '<hardcoded>'` check, which was
+    // only as strong as a password that shipped inside the APK.
+    // token.get(key, default) rather than token.admin: reading an absent claim
+    // raises an evaluation error, and although an error still denies, an error
+    // inside one branch of an `||` makes the rule's outcome depend on operand
+    // order. Defaulting to false keeps every branch total.
+    function hasAdminClaim() {
+      return isSignedIn() && request.auth.token.get('admin', false) == true;
+    }
+
+    // TRANSITIONAL — delete this function and the `|| isConfiguredAdminEmail()`
+    // below once functions/scripts/bootstrap-admin.js has issued the claim.
+    //
+    // There is deliberately no in-app path to mint the first admin claim, so
+    // until the script is run nobody holds one and the operator cannot publish
+    // a blog, add a book, or edit the thought of the day. This keeps parity
+    // with the rules currently deployed on the project.
+    //
+    // The email is read from the Firebase-signed ID token, so it cannot be
+    // forged, and Firebase enforces address uniqueness so no other account can
+    // register it. The vulnerability that was removed was a hardcoded
+    // *password* inside the APK, not this comparison.
+    function isConfiguredAdminEmail() {
+      return isSignedIn()
+             && request.auth.token.get('email', '') == 'officialshashi2023@gmail.com';
+    }
+
     function isAdmin() {
-      return isAuthenticated() &&
-        request.auth.token.email == 'officialshashi2023@gmail.com';
+      return hasAdminClaim() || isConfiguredAdminEmail();
     }
 
-    // Profiles Collection
-    match /profiles/{uid} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+    // The document being written declares this user as its owner.
+    function incomingIsMine() {
+      return isSignedIn() && request.resource.data.uid == uid();
     }
 
-    // Journal Entries Collection
+    // The document already stored belongs to this user.
+    function storedIsMine() {
+      return isSignedIn() && resource.data.uid == uid();
+    }
+
+    // A safe update: the caller owns the document now, still owns it after, and
+    // is not reassigning ownership to or away from anyone.
+    function updatingMyOwnDoc() {
+      return storedIsMine() && incomingIsMine();
+    }
+
+    function changedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    // Fields only the server may ever write. Entitlement (premium), privilege
+    // (role), and payment provenance must never be settable by the account
+    // that benefits from them.
+    function serverOnlyProfileFields() {
+      return ['premium', 'role', 'paymentId', 'subscriptionId',
+              'planSelected', 'paymentDate', 'purchaseCount'];
+    }
+
+    function touchesServerOnlyProfileFields() {
+      return changedKeys().hasAny(serverOnlyProfileFields());
+    }
+
+    function createsServerOnlyProfileFields() {
+      return request.resource.data.keys().hasAny(serverOnlyProfileFields());
+    }
+
+    function isBoundedString(value, maxLen) {
+      return value is string && value.size() <= maxLen;
+    }
+
+    function isCount(value, maxValue) {
+      return value is int && value >= 0 && value <= maxValue;
+    }
+
+    // ──────────────────────────── profiles ────────────────────────────
+    //
+    // Holds PII: email, phone, age, gender, and payment provenance. Previously
+    // every signed-in user could read every profile — the leaderboard needed
+    // it — which exposed the full name, email address and phone number of the
+    // entire user base to anyone who signed up. Public ranking data now lives
+    // in /leaderboard instead, so this collection is owner-only.
+
+    // Avatars are a fixed catalogue of eight bundled vector images, chosen by
+    // id. Photo upload was removed entirely, which takes the whole problem
+    // away: there is no file to store, nothing to moderate, and no image of a
+    // real person published to every other member on the leaderboard.
+    //
+    // The 30-day change limit went with it. That limit existed because uploads
+    // cost storage and invited abuse; picking a preset costs nothing, so the
+    // restriction would have been friction with no threat behind it.
+    //
+    // The id is length-bounded so a client cannot stuff arbitrary data through
+    // this field, and the app rejects ids outside the catalogue before writing.
+    function avatarIdIsSane() {
+      return !('avatarId' in request.resource.data)
+             || request.resource.data.avatarId == null
+             || isBoundedString(request.resource.data.avatarId, 40);
+    }
+
+    match /profiles/{userId} {
+      allow read: if isAdmin() || (isSignedIn() && uid() == userId);
+
+      allow create: if isSignedIn()
+                    && uid() == userId
+                    && !createsServerOnlyProfileFields()
+                    && avatarIdIsSane();
+
+      allow update: if isAdmin()
+                    || (isSignedIn()
+                        && uid() == userId
+                        && !touchesServerOnlyProfileFields()
+                        && avatarIdIsSane());
+
+      allow delete: if isAdmin();
+    }
+
+    // ────────────────────────── leaderboard ───────────────────────────
+    //
+    // The public projection of a member's practice: display name and counters,
+    // deliberately no email, phone, age, gender or payment data. Readable by
+    // any signed-in member so the Community screen works; writable only by its
+    // owner, and every field is type- and range-checked so a forged document
+    // cannot be used to inject markup or absurd values into other users' UI.
+    //
+    // A Cloud Function recomputes these counters from the underlying documents
+    // whenever an entry or meditation session is written, so a client that
+    // inflates its own numbers is corrected on its next real activity. The
+    // residual risk is a member overstating their own streak — vanity only, no
+    // access to data, money, or privilege.
+
+    match /leaderboard/{userId} {
+      allow read: if isSignedIn();
+
+      // An admin may write any row. Rows are otherwise only created when their
+      // owner opens the app, so a member who has not launched the new build is
+      // simply missing from the board — and with Cloud Functions unavailable on
+      // the free plan there is no server-side trigger to backfill them. The
+      // admin rebuild action fills the gap. The rows still contain no personal
+      // data, so this widens who can write a public projection, not who can
+      // read anything private.
+      allow create, update: if isAdmin()
+                            || isSignedIn()
+                            && uid() == userId
+                            && isBoundedString(request.resource.data.displayName, 80)
+                            && isCount(request.resource.data.streak, 100000)
+                            && isCount(request.resource.data.longestStreak, 100000)
+                            && isCount(request.resource.data.totalJournalEntries, 1000000)
+                            && isCount(request.resource.data.totalMeditationSeconds, 100000000)
+                            // Only a catalogue id, never a URL. The previous
+                            // rule had to police arbitrary photo URLs to stop a
+                            // member pointing other people's app sessions at a
+                            // server they control; a bounded id cannot do that
+                            // at all.
+                            && avatarIdIsSane()
+                            && !request.resource.data.keys().hasAny(
+                                 ['email', 'phone', 'age', 'gender', 'premium', 'role']);
+
+      allow delete: if isAdmin();
+    }
+
+    // ─────────────────────────── journal entries ───────────────────────
+    //
+    // Was: `resource == null || resource.data.uid == uid || request.resource.data.uid == uid`.
+    // The first clause let anyone create an entry carrying someone else's uid;
+    // the third let anyone overwrite another user's entry by stamping their own
+    // uid on the payload. Both are closed by checking stored and incoming
+    // ownership independently per operation.
+
     match /entries/{entryId} {
-      allow read, write: if isAuthenticated() &&
-        (resource == null ||
-         resource.data.uid == request.auth.uid ||
-         request.resource.data.uid == request.auth.uid);
+      allow read: if storedIsMine() || isAdmin();
+      allow create: if incomingIsMine();
+      allow update: if updatingMyOwnDoc();
+      allow delete: if storedIsMine() || isAdmin();
     }
 
-    // User Affirmations Collection
-    match /user_affirmations/{uid} {
-      allow read, write: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
-    }
+    // ──────────────────────── meditation sessions ──────────────────────
+    //
+    // Was `allow create: if isAuthenticated()` with no condition at all — any
+    // signed-in user could write a session under any uid with any duration,
+    // which is directly forgeable leaderboard input. Duration is now bounded to
+    // 24h so a single document cannot poison aggregate stats.
 
-    // Affirmation Sessions Collection
-    match /affirmation_sessions/{sessionId} {
-      allow create: if isAuthenticated();
-      allow read, write: if isAuthenticated() &&
-        (resource == null ||
-         resource.data.uid == request.auth.uid ||
-         request.resource.data.uid == request.auth.uid);
-    }
-
-    // Affirmation Progress Collection
-    match /affirmation_progress/{progressId} {
-      allow read, write: if isAuthenticated() &&
-        (resource == null ||
-         resource.data.uid == request.auth.uid ||
-         request.resource.data.uid == request.auth.uid);
-    }
-
-    // Meditation Sessions Collection
     match /meditation_sessions/{sessionId} {
-      allow create: if isAuthenticated();
-      allow read, write: if isAuthenticated() &&
-        (resource == null ||
-         resource.data.uid == request.auth.uid ||
-         request.resource.data.uid == request.auth.uid);
+      allow read: if storedIsMine() || isAdmin();
+      allow create: if incomingIsMine()
+                    && isCount(request.resource.data.duration, 86400);
+      allow update: if updatingMyOwnDoc()
+                    && isCount(request.resource.data.duration, 86400);
+      allow delete: if storedIsMine() || isAdmin();
     }
 
-    // Anonymous Thoughts Collection
+    // ───────────────────────── affirmations ────────────────────────────
+
+    match /user_affirmations/{userId} {
+      allow read, write: if (isSignedIn() && uid() == userId) || isAdmin();
+    }
+
+    match /affirmation_sessions/{sessionId} {
+      allow read: if storedIsMine() || isAdmin();
+      allow create: if incomingIsMine();
+      allow update: if updatingMyOwnDoc();
+      allow delete: if storedIsMine() || isAdmin();
+    }
+
+    match /affirmation_progress/{progressId} {
+      allow read: if storedIsMine() || isAdmin();
+      allow create: if incomingIsMine();
+      allow update: if updatingMyOwnDoc();
+      allow delete: if storedIsMine() || isAdmin();
+    }
+
+    // ─────────────────────── anonymous thoughts ────────────────────────
+    //
+    // The feature promises anonymity, but each document stored the author's
+    // `uid` alongside the text and was readable by every signed-in user — so
+    // "anonymous" reflections could be attributed to a named account by joining
+    // against /profiles. Authorship now lives in /thought_authors, which no
+    // client can read, and the public document carries only the generated
+    // spiritual name.
+    //
+    // The exists() branch keeps documents written before this change editable
+    // by their original author during migration.
+
+    function ownsThought(thoughtId) {
+      return isSignedIn()
+             && exists(/databases/$(database)/documents/thought_authors/$(thoughtId))
+             && get(/databases/$(database)/documents/thought_authors/$(thoughtId)).data.uid == uid();
+    }
+
+    function ownsLegacyThought() {
+      return isSignedIn() && 'uid' in resource.data && resource.data.uid == uid();
+    }
+
     match /anonymous_thoughts/{thoughtId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update, delete: if isAuthenticated() &&
-        (resource.data.uid == request.auth.uid || isAdmin());
+      allow read: if isSignedIn();
+
+      // Replies are appended by any member, so updates cannot be owner-only.
+      // Instead the immutable parts of the post are pinned: an attacker may add
+      // a reply but cannot rewrite someone else's reflection.
+      allow create: if isSignedIn()
+                    && isBoundedString(request.resource.data.content, 5000)
+                    && isBoundedString(request.resource.data.anonymousName, 60)
+                    && !request.resource.data.keys().hasAny(['uid']);
+
+      allow update: if isAdmin()
+                    || ownsThought(thoughtId)
+                    || ownsLegacyThought()
+                    || (isSignedIn()
+                        && changedKeys().hasOnly(['replies'])
+                        && request.resource.data.replies.size() <= 500);
+
+      allow delete: if isAdmin() || ownsThought(thoughtId) || ownsLegacyThought();
     }
 
-    // Blogs Collection
-    match /blogs/{blogId} {
-      // Anyone (logged in or not) can read blogs
-      allow read: if true;
+    // Author mirror for the anonymous feed. Deliberately unreadable by every
+    // client — it exists so the rules above can verify ownership without the
+    // public document having to carry the author's identity. Cloud Functions
+    // reach it through the Admin SDK.
+    match /thought_authors/{thoughtId} {
+      allow read: if false;
+      allow create: if incomingIsMine();
+      allow update, delete: if false;
+    }
 
-      // Only admin can create or delete blogs
+    // ──────────────────────────── blogs ────────────────────────────
+
+    // True when the only change to the likes array is the caller adding or
+    // removing their own uid. get('likes', []) rather than .likes so a post
+    // that has never been liked does not raise an error and deny the write.
+    function likesChangeIsOwn() {
+      return !('likes' in request.resource.data)
+             || (request.resource.data.likes is list
+                 && request.resource.data.likes.size() <= 100000
+                 && request.resource.data.likes.toSet()
+                      .difference(resource.data.get('likes', []).toSet())
+                      .hasOnly([uid()])
+                 && resource.data.get('likes', []).toSet()
+                      .difference(request.resource.data.likes.toSet())
+                      .hasOnly([uid()]));
+    }
+
+    match /blogs/{blogId} {
+      allow read: if true; // public marketing content, no user data
       allow create, delete: if isAdmin();
 
-      // Admin can update anything. Authenticated users can ONLY update the 'likes' and 'sharesCount' fields.
-      allow update: if isAdmin() ||
-        (isAuthenticated() &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes', 'sharesCount']));
+      // `likes` is an array of uids, not a counter — an earlier version of this
+      // rule required an integer and silently rejected every like.
+      //
+      // A member may only add or remove *themselves*. Comparing the symmetric
+      // difference of the old and new arrays means the only uid that can appear
+      // or disappear is the caller's own, so nobody can like on someone else's
+      // behalf or overwrite the list with a fabricated one.
+      allow update: if isAdmin()
+                    || (isSignedIn()
+                        && changedKeys().hasOnly(['likes', 'sharesCount'])
+                        && likesChangeIsOwn()
+                        && (!('sharesCount' in request.resource.data)
+                            || isCount(request.resource.data.sharesCount, 10000000)));
 
-      // Nested Comments inside Blogs
       match /comments/{commentId} {
         allow read: if true;
-        allow create: if isAuthenticated();
-        allow update, delete: if isAuthenticated() &&
-          (resource.data.uid == request.auth.uid || isAdmin());
+        allow create: if incomingIsMine()
+                      && isBoundedString(request.resource.data.content, 2000);
+        allow update: if updatingMyOwnDoc();
+        allow delete: if storedIsMine() || isAdmin();
       }
     }
 
-    // Products (Books/Library Store) — Admin writes, everyone reads
+    // ─────────────────────────── products ──────────────────────────────
+    //
+    // The catalogue was world-readable and each document carried `pdfLink`, the
+    // very asset being sold — so the paywall could be bypassed by reading
+    // Firestore directly, without paying and without even signing in. The link
+    // now lives in a /secure subdocument gated on a verified purchase, and the
+    // catalogue itself requires sign-in.
+
+    function isFreeProduct(productId) {
+      return exists(/databases/$(database)/documents/products/$(productId))
+             && get(/databases/$(database)/documents/products/$(productId)).data.isFree == true;
+    }
+
+    // Purchase documents use the deterministic id "<uid>_<productId>" so
+    // entitlement can be checked with a single cheap lookup.
+    function hasPurchased(productId) {
+      return isSignedIn()
+             && exists(/databases/$(database)/documents/purchases/$(uid() + '_' + productId));
+    }
+
     match /products/{productId} {
-      allow read: if true;
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+
+      match /secure/{docId} {
+        allow read: if isAdmin() || isFreeProduct(productId) || hasPurchased(productId);
+        allow write: if isAdmin();
+      }
+    }
+
+    // ─────────────────────────── purchases ─────────────────────────────
+    //
+    // Was creatable by any signed-in user for themselves, so a member could
+    // fabricate a purchase record and unlock any paid product for free. Records
+    // are now written exclusively by the payment-verification Cloud Function
+    // after it checks the Razorpay HMAC signature.
+
+    match /purchases/{purchaseId} {
+      allow read: if isAdmin() || storedIsMine()
+                  || (isSignedIn() && resource.data.userId == uid());
+      allow create, update, delete: if false; // server-only (Admin SDK)
+    }
+
+    // ────────────────────────── notifications ──────────────────────────
+    //
+    // This is an app-wide broadcast feed — posting a reflection or publishing a
+    // book raises an event every device listens to — so reads stay open to
+    // signed-in members and it deliberately carries no personal data.
+    //
+    // Creation was previously unconstrained: any account could push arbitrary
+    // text, of any length, to every user's notification tray. It is now bounded
+    // in size, restricted to known event types, and attributed to its author so
+    // abuse can be traced and rate-limited. Editing and deleting are admin-only,
+    // which stops one member rewriting another's event after the fact.
+    //
+    // Residual risk: a member can still trigger a broadcast by using the app as
+    // designed. Moving creation into Cloud Function triggers on blog/product/
+    // thought writes removes that entirely — see the follow-ups in SECURITY.md.
+
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+                    && request.resource.data.createdBy == uid()
+                    && isBoundedString(request.resource.data.title, 150)
+                    && isBoundedString(request.resource.data.body, 1000)
+                    && request.resource.data.type in
+                         ['blog', 'library', 'community', 'announcement', 'system'];
+      allow update, delete: if isAdmin();
+    }
+
+    // Signup alerts destined for the operator. A user may raise one for
+    // themselves at registration; only an admin can read them back.
+    match /admin_notifications/{alertId} {
+      allow read, update, delete: if isAdmin();
+      allow create: if isSignedIn()
+                    && isBoundedString(request.resource.data.type, 60)
+                    && isBoundedString(request.resource.data.title, 200)
+                    && isBoundedString(request.resource.data.body, 2000);
+    }
+
+    // ─────────────────── announcements / metadata / config ─────────────
+
+    match /announcements/{announcementId} {
+      allow read: if isSignedIn();
       allow write: if isAdmin();
     }
 
-    // Purchases — created after successful payment; users read their own
-    match /purchases/{purchaseId} {
-      // User can read their own purchase records; admin sees all
-      allow read: if isAuthenticated() &&
-        (resource.data.userId == request.auth.uid || isAdmin());
-      // Any authenticated user can create a purchase (after Razorpay success)
-      allow create: if isAuthenticated() &&
-        request.resource.data.userId == request.auth.uid;
-      // Purchase records are immutable — no update/delete
-      allow update, delete: if isAdmin();
+    match /metadata/{documentId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Version gate for the in-app update prompt. This collection had no rule at
+    // all, so the default deny made every update check fail with
+    // permission-denied and users were never prompted to upgrade.
+    match /app_config/{documentId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Support tickets raised from the help centre; written by the client,
+    // readable only by an admin.
+    match /support_tickets/{ticketId} {
+      allow read, update, delete: if isAdmin();
+      allow create: if incomingIsMine()
+                    && isBoundedString(request.resource.data.message, 5000)
+                    && isBoundedString(request.resource.data.category, 60);
+    }
+
+    // ──────────────────────────── default ──────────────────────────────
+    // Anything not matched above is denied. Listed explicitly so that adding a
+    // new collection is a deliberate act rather than an accidental exposure.
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

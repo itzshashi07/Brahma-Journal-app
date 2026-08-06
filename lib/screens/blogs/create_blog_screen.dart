@@ -47,7 +47,11 @@ class _CreateBlogScreenState extends State<CreateBlogScreen> {
         title: _titleCtrl.text.trim(),
         content: _contentCtrl.text.trim(),
         authorName: auth.profile?.name ?? 'Admin',
-        authorEmail: auth.user?.email ?? 'officialshashi2023@gmail.com',
+        // Was a hardcoded operator address. Only an admin reaches this screen,
+        // so the signed-in account is always the right author — and baking a
+        // real email into the binary just hands out a target for credential
+        // stuffing against the one account that matters.
+        authorEmail: auth.user?.email ?? '',
       );
 
       if (mounted) {

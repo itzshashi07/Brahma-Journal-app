@@ -1,0 +1,14 @@
+<!-- Bodhi tree — patience and rootedness. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <g stroke="white" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+    <!-- canopy -->
+    <path d="M50 12 C 70 12, 82 26, 80 40 C 78 52, 66 58, 50 58 C 34 58, 22 52, 20 40 C 18 26, 30 12, 50 12 Z"/>
+    <path d="M32 30 C 40 24, 60 24, 68 30" opacity="0.45" stroke-width="2"/>
+    <path d="M28 42 C 38 36, 62 36, 72 42" opacity="0.35" stroke-width="2"/>
+    <!-- trunk + roots -->
+    <path d="M50 58 V78"/>
+    <path d="M50 66 L40 58" opacity="0.6" stroke-width="2.2"/>
+    <path d="M50 70 L60 62" opacity="0.6" stroke-width="2.2"/>
+    <path d="M34 88 C 42 80, 58 80, 66 88"/>
+  </g>
+</svg>

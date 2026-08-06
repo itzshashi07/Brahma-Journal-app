@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 class BlogComment {
   final String id;
+  /// Author's Firebase uid — what firestore.rules checks for edit and delete.
+  final String uid;
   final String authorName;
   final String authorEmail;
   final String content;
@@ -9,6 +11,7 @@ class BlogComment {
 
   BlogComment({
     required this.id,
+    this.uid = '',
     required this.authorName,
     required this.authorEmail,
     required this.content,
@@ -18,6 +21,7 @@ class BlogComment {
   factory BlogComment.fromMap(String id, Map<String, dynamic> data) {
     return BlogComment(
       id: id,
+      uid: data['uid'] ?? '',
       authorName: data['authorName'] ?? 'Anonymous',
       authorEmail: data['authorEmail'] ?? '',
       content: data['content'] ?? '',
@@ -29,6 +33,10 @@ class BlogComment {
 
   Map<String, dynamic> toMap() {
     return {
+      // Stamped so a comment is attributable to its author: firestore.rules
+      // uses it to let someone edit or delete their own comment and nobody
+      // else's. Without it every comment write was rejected.
+      'uid': uid,
       'authorName': authorName,
       'authorEmail': authorEmail,
       'content': content,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/theme/app_theme.dart';
 import '../../services/email_service.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class SupportScreen extends StatefulWidget {
   const SupportScreen({super.key});
@@ -20,6 +21,35 @@ class _SupportScreenState extends State<SupportScreen> with SingleTickerProvider
   String _selectedCategory = 'General Query';
 
   bool _isSubmitting = false;
+
+  /// Opens WhatsApp with the user's typed message pre-filled, so a failed
+  /// in-app send does not cost them the text they just wrote.
+  Future<void> _launchWhatsAppWithMessage(String message) async {
+    final text = Uri.encodeComponent(
+      message.isEmpty ? 'Hello, I need help with Brahma Journal.' : message,
+    );
+    final url = Uri.parse('https://wa.me/918078633912?text=$text');
+    try {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      await _launchWhatsApp();
+    }
+  }
+
+  Future<void> _launchWhatsApp() async {
+    final Uri url = Uri.parse('https://wa.me/918078633912');
+    try {
+      if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+        throw 'Could not launch WhatsApp';
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open WhatsApp: $e', style: const TextStyle(fontFamily: 'Outfit')), backgroundColor: Colors.redAccent),
+        );
+      }
+    }
+  }
 
   final List<Map<String, String>> _faqs = [
     {
@@ -83,7 +113,7 @@ class _SupportScreenState extends State<SupportScreen> with SingleTickerProvider
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               title: const Text('Message Sent', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary, fontWeight: FontWeight.bold)),
               content: const Text(
-                'Thank you! Your query has been successfully dispatched to our support team. We will get back to you shortly.',
+                'Thank you — your message has reached us. We read every one and will get back to you shortly.',
                 style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary),
               ),
               actions: [
@@ -95,8 +125,35 @@ class _SupportScreenState extends State<SupportScreen> with SingleTickerProvider
             ),
           );
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Failed to send message. Please check connection.'), backgroundColor: Colors.redAccent),
+          // Sending goes through a Cloud Function that holds the mail
+          // credentials. When it is unreachable — not deployed, or offline —
+          // the message would otherwise be lost silently after the user typed
+          // it out. Hand them the channel that does work instead of a dead end.
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: AppTheme.bgCard,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Text('Could not send just now',
+                  style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary, fontWeight: FontWeight.bold)),
+              content: const Text(
+                'Your message has not been sent. Please reach us on WhatsApp — we reply there fastest, and nothing you typed is lost.',
+                style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Close', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textMuted)),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _launchWhatsAppWithMessage(_msgCtrl.text.trim());
+                  },
+                  child: const Text('Open WhatsApp'),
+                ),
+              ],
+            ),
           );
         }
       }
@@ -216,9 +273,9 @@ class _SupportScreenState extends State<SupportScreen> with SingleTickerProvider
                                 borderRadius: BorderRadius.circular(14),
                                 border: Border.all(color: AppTheme.primary.withOpacity(0.2)),
                               ),
-                              child: const Column(
+                              child: Column(
                                 children: [
-                                  Row(
+                                  const Row(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
                                       Icon(Icons.phone_outlined, size: 16, color: AppTheme.primary),
@@ -229,10 +286,23 @@ class _SupportScreenState extends State<SupportScreen> with SingleTickerProvider
                                       ),
                                     ],
                                   ),
-                                  SizedBox(height: 6),
-                                  Text(
+                                  const SizedBox(height: 6),
+                                  const Text(
                                     'Hours: 10:00 AM - 6:00 PM',
                                     style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textMuted, fontSize: 11),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  const Divider(color: Color(0xFF2D2D4E)),
+                                  const SizedBox(height: 8),
+                                  ElevatedButton.icon(
+                                    onPressed: _launchWhatsApp,
+                                    icon: const Icon(Icons.chat_bubble_outline, size: 16, color: Colors.white),
+                                    label: const Text('Chat on WhatsApp', style: TextStyle(fontFamily: 'Outfit', color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF10B981),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                    ),
                                   ),
                                 ],
                               ),
@@ -330,6 +400,7 @@ class _SupportScreenState extends State<SupportScreen> with SingleTickerProvider
                                       ),
                                     ),
                             ),
+                            const SizedBox(height: 20),
                           ],
                         ),
                       ),

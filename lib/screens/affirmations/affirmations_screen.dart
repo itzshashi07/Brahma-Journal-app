@@ -106,6 +106,45 @@ class _AffirmationsScreenState extends State<AffirmationsScreen> with SingleTick
     super.dispose();
   }
 
+  Future<void> _deleteAffirmation(int index) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.bgCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Delete Affirmation?', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary)),
+        content: const Text('Are you sure you want to delete this affirmation?', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      final auth = context.read<AuthProvider>();
+      final newList = List<String>.from(_affirmations)..removeAt(index);
+      await _service.saveUserAffirmations(auth.user!.uid, newList);
+      setState(() {
+        _affirmations = newList;
+        if (_currentIndex >= newList.length && newList.isNotEmpty) {
+          _currentIndex = newList.length - 1;
+        } else if (newList.isEmpty) {
+          _currentIndex = 0;
+        }
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Affirmation removed.', style: TextStyle(fontFamily: 'Outfit'))),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -233,28 +272,32 @@ class _AffirmationsScreenState extends State<AffirmationsScreen> with SingleTick
                         Expanded(
                           child: ListView.builder(
                             itemCount: _affirmations.length,
-                            itemBuilder: (ctx, i) => GestureDetector(
-                              onTap: () {
-                                _slideCtrl.reset();
-                                setState(() => _currentIndex = i);
-                                _slideCtrl.forward();
-                              },
-                              child: Container(
-                                margin: const EdgeInsets.only(bottom: 8),
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                decoration: BoxDecoration(
-                                  color: i == _currentIndex ? AppTheme.primary.withOpacity(0.15) : AppTheme.bgCard,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: i == _currentIndex ? AppTheme.primary.withOpacity(0.4) : const Color(0xFF2D2D4E),
-                                  ),
+                            itemBuilder: (ctx, i) => Container(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              decoration: BoxDecoration(
+                                color: i == _currentIndex ? AppTheme.primary.withOpacity(0.15) : AppTheme.bgCard,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: i == _currentIndex ? AppTheme.primary.withOpacity(0.4) : const Color(0xFF2D2D4E),
                                 ),
-                                child: Text(
+                              ),
+                              child: ListTile(
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                                onTap: () {
+                                  _slideCtrl.reset();
+                                  setState(() => _currentIndex = i);
+                                  _slideCtrl.forward();
+                                },
+                                title: Text(
                                   _affirmations[i],
                                   style: TextStyle(
                                     fontFamily: 'Outfit', fontSize: 14,
                                     color: i == _currentIndex ? AppTheme.primary : AppTheme.textSecondary,
                                   ),
+                                ),
+                                trailing: IconButton(
+                                  icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                                  onPressed: () => _deleteAffirmation(i),
                                 ),
                               ),
                             ),

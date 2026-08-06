@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Paths the FileProvider is allowed to hand out.
+
+  The installer runs in another process, so it cannot read a file path directly
+  out of our sandbox — it needs a content:// URI granted per-invocation. Only
+  the cache directory is exposed, which is where the downloaded APK lands.
+-->
+<paths>
+    <cache-path name="updates" path="updates/" />
+    <external-cache-path name="external_updates" path="updates/" />
+</paths>

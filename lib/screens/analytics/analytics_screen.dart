@@ -7,6 +7,13 @@ import '../../providers/journal_provider.dart';
 import '../../models/journal_entry.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/date_utils.dart';
+import '../../services/meditation_service.dart';
+import 'dart:ui' as ui;
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/rendering.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 class AnalyticsScreen extends StatefulWidget {
   const AnalyticsScreen({super.key});
@@ -16,6 +23,10 @@ class AnalyticsScreen extends StatefulWidget {
 }
 
 class _AnalyticsScreenState extends State<AnalyticsScreen> {
+  final MeditationService _meditationService = MeditationService();
+  List<Map<String, dynamic>> _meditationSessions = [];
+  bool _loadingMeditation = true;
+
   @override
   void initState() {
     super.initState();
@@ -24,9 +35,20 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 
   Future<void> _loadData() async {
     final auth = context.read<AuthProvider>();
-    if (auth.user != null) {
-      await context.read<JournalProvider>().loadEntries(auth.user!.uid);
+    final uid = auth.user?.uid;
+    if (uid == null) {
+      // Otherwise the meditation cards spin forever for a signed-out user.
+      setState(() => _loadingMeditation = false);
+      return;
     }
+
+    await context.read<JournalProvider>().loadEntries(uid);
+    final sessions = await _meditationService.getSessions(uid);
+    if (!mounted) return;
+    setState(() {
+      _meditationSessions = sessions;
+      _loadingMeditation = false;
+    });
   }
 
   List<FlSpot> _getMoodSpots(List<JournalEntry> entries) {
@@ -48,12 +70,60 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     return sum / entries.length;
   }
 
+  final GlobalKey _boundaryKey = GlobalKey();
+  bool _isSharing = false;
+
+  Future<void> _shareReportAsImage() async {
+    if (_isSharing) return;
+    setState(() => _isSharing = true);
+
+    try {
+      // Small delay to ensure render is stable
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      final boundary = _boundaryKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+
+      if (byteData != null) {
+        final Uint8List pngBytes = byteData.buffer.asUint8List();
+        final tempDir = await getTemporaryDirectory();
+        final file = await File('${tempDir.path}/brahma_spiritual_report.png').create();
+        await file.writeAsBytes(pngBytes);
+
+        await Share.shareXFiles(
+          [XFile(file.path)],
+          text: 'My Brahma Spiritual Progress Report 🧘✨',
+        );
+      }
+    } catch (e) {
+      print('❌ Error sharing image: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to generate report image: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSharing = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final journal = context.watch<JournalProvider>();
     final entries = journal.entries;
     final avgMood = _getAverageMood(entries);
     final moodSpots = entries.isNotEmpty ? _getMoodSpots(entries) : <FlSpot>[];
+
+    final totalSeconds = _meditationService.totalSeconds(_meditationSessions);
+    final todaySeconds = _meditationService.todaySeconds(_meditationSessions);
+
+    final totalMinStr = (totalSeconds / 60).toStringAsFixed(1) + "m";
+    final todayStr = todaySeconds > 0
+        ? "${(todaySeconds ~/ 60)}m ${todaySeconds % 60}s"
+        : "0m 0s";
 
     return Scaffold(
       body: Container(
@@ -68,12 +138,20 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                   children: [
                     IconButton(icon: const Icon(Icons.arrow_back_ios, color: AppTheme.textPrimary, size: 20), onPressed: () => context.pop()),
                     const Expanded(child: Text('📊 Analytics', style: TextStyle(fontFamily: 'Outfit', fontSize: 20, fontWeight: FontWeight.w600, color: AppTheme.textPrimary), textAlign: TextAlign.center)),
-                    const SizedBox(width: 44),
+                    _isSharing
+                        ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary))
+                        : IconButton(
+                            icon: const Icon(Icons.share, color: AppTheme.primary),
+                            onPressed: _shareReportAsImage,
+                          ),
                   ],
                 ),
               ),
 
-              if (journal.loading)
+              // Wait for the meditation sessions too — rendering early showed a
+              // real streak next to 0.0m of meditation, which reads as wrong
+              // data rather than as "still loading".
+              if (journal.loading || _loadingMeditation)
                 const Expanded(child: Center(child: CircularProgressIndicator(color: AppTheme.primary)))
               else
                 Expanded(
@@ -81,31 +159,85 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Column(
                       children: [
-                        // Stats Grid
-                        Row(
-                          children: [
-                            Expanded(child: _AnalyticCard(icon: Icons.book_outlined, value: '${entries.length}', label: 'Total Entries', color: AppTheme.primary)),
-                            const SizedBox(width: 12),
-                            Expanded(child: _AnalyticCard(icon: Icons.local_fire_department_outlined, value: '${journal.streak}', label: 'Current Streak', color: const Color(0xFFF59E0B))),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(child: _AnalyticCard(
-                              icon: _getMoodIcon(avgMood),
-                              value: avgMood > 0 ? avgMood.toStringAsFixed(1) : '-',
-                              label: 'Avg Mood',
-                              color: _getMoodColor(avgMood),
-                            )),
-                            const SizedBox(width: 12),
-                            Expanded(child: _AnalyticCard(
-                              icon: Icons.calendar_month_outlined,
-                              value: entries.isNotEmpty ? '${_getMonthCount(entries)}' : '0',
-                              label: 'This Month',
-                              color: const Color(0xFF10B981),
-                            )),
-                          ],
+                         RepaintBoundary(
+                          key: _boundaryKey,
+                          child: Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF13132B), Color(0xFF1E1E3F)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: const Color(0xFF2D2D4E)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Row(
+                                  children: [
+                                    Icon(Icons.spa_outlined, size: 18, color: AppTheme.primary),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'Brahma Progress Report',
+                                      style: TextStyle(
+                                        fontFamily: 'Outfit',
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                                // Stats Grid
+                                Row(
+                                  children: [
+                                    Expanded(child: _AnalyticCard(icon: Icons.book_outlined, value: '${entries.length}', label: 'Total Entries', color: AppTheme.primary)),
+                                    const SizedBox(width: 12),
+                                    Expanded(child: _AnalyticCard(icon: Icons.local_fire_department_outlined, value: '${journal.streak}', label: 'Current Streak', color: const Color(0xFFF59E0B))),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    Expanded(child: _AnalyticCard(
+                                      icon: _getMoodIcon(avgMood),
+                                      value: avgMood > 0 ? avgMood.toStringAsFixed(1) : '-',
+                                      label: 'Avg Mood',
+                                      color: _getMoodColor(avgMood),
+                                    )),
+                                    const SizedBox(width: 12),
+                                    Expanded(child: _AnalyticCard(
+                                      icon: Icons.calendar_month_outlined,
+                                      value: entries.isNotEmpty ? '${_getMonthCount(entries)}' : '0',
+                                      label: 'This Month',
+                                      color: const Color(0xFF10B981),
+                                    )),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    Expanded(child: _AnalyticCard(
+                                      icon: Icons.spa_outlined,
+                                      value: totalMinStr,
+                                      label: 'Total Meditation',
+                                      color: const Color(0xFF0891B2),
+                                    )),
+                                    const SizedBox(width: 12),
+                                    Expanded(child: _AnalyticCard(
+                                      icon: Icons.timer_outlined,
+                                      value: todayStr,
+                                      label: "Today's Meditation",
+                                      color: const Color(0xFF06D6A0),
+                                    )),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
                         const SizedBox(height: 20),
 

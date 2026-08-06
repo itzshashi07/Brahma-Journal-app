@@ -1,50 +1,101 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
-import '../core/constants/app_constants.dart';
+import 'backend_service.dart';
+import 'support_relay.dart';
 
+/// Outbound email.
+///
+/// This class used to hold a Resend API key (read from the bundled .env) and
+/// POST directly to api.resend.com. Because the key shipped inside the APK,
+/// anyone could extract it and send mail as Brahma Journal to any address —
+/// a ready-made phishing channel aimed at this app's own users. It also
+/// interpolated user-supplied names and messages into HTML without escaping.
+///
+/// Sending now happens in the `sendSupportEmail` Cloud Function, which holds
+/// the key in Secret Manager, escapes every user-supplied value, and will only
+/// ever address the operator.
 class EmailService {
-  Future<bool> sendEmail({
-    required String subject,
-    required String htmlContent,
-  }) async {
-    final apiKey = AppConstants.resendApiKey;
-    final toEmail = AppConstants.adminEmail;
+  EmailService({BackendService? backend})
+      : _backend = backend ?? BackendService();
 
-    if (apiKey.isEmpty) {
-      debugPrint('⚠️ Resend API Key is unconfigured. Cannot send email alert.');
-      return false;
+  final BackendService _backend;
+
+  /// Files a support ticket.
+  ///
+  /// Preferred path is the `sendSupportEmail` Cloud Function, which holds the
+  /// Resend credentials and emails the operator. That function only exists once
+  /// Functions are deployed, which requires the Blaze plan — so when it is
+  /// unreachable the ticket is written straight to Firestore instead.
+  ///
+  /// The fallback stores; it does not send. Nothing here can email anyone,
+  /// because the app deliberately no longer holds the mail credentials: that
+  /// key used to ship inside the APK, where anyone could extract it and send
+  /// mail as this brand to its own users. A stored ticket the operator reads in
+  /// the console is a worse experience than an email, and a much better one
+  /// than a lost message.
+  Future<bool> sendSupportQuery({
+    required String name,
+    required String email,
+    required String category,
+    required String message,
+  }) async {
+    try {
+      // name and email come from the caller's verified ID token on the server,
+      // so they are no longer accepted from the client at all.
+      return await _backend.sendSupportTicket(
+        category: category,
+        message: message,
+      );
+    } catch (e) {
+      debugPrint('ℹ️ Support mail function unavailable ($e) — using fallbacks');
     }
 
-    try {
-      final url = Uri.parse('https://api.resend.com/emails');
-      final response = await http.post(
-        url,
-        headers: {
-          'Authorization': 'Bearer $apiKey',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'from': 'Brahma Journal <onboarding@resend.dev>',
-          'to': toEmail,
-          'subject': subject,
-          'html': htmlContent,
-        }),
-      );
+    // Store first, notify second. The ticket surviving matters more than the
+    // email arriving, and the admin inbox reads from Firestore either way.
+    final stored = await _storeTicketDirectly(category: category, message: message);
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        debugPrint('✅ Email alert dispatched successfully!');
-        return true;
-      } else {
-        debugPrint('⚠️ Resend email dispatch returned status ${response.statusCode}: ${response.body}');
-        return false;
-      }
+    // Best-effort delivery through whatever relay is configured. A failure here
+    // is invisible to the user because the message is already saved.
+    await SupportRelay.send(
+      name: name,
+      email: email,
+      category: category,
+      message: message,
+    );
+
+    return stored;
+  }
+
+  Future<bool> _storeTicketDirectly({
+    required String category,
+    required String message,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return false;
+
+    try {
+      await FirebaseFirestore.instance.collection('support_tickets').add({
+        // Field names and bounds match the support_tickets rule exactly; the
+        // write is rejected otherwise.
+        'uid': user.uid,
+        'name': user.displayName ?? '',
+        'email': user.email ?? '',
+        'category': category.substring(0, category.length.clamp(0, 60)),
+        'message': message.substring(0, message.length.clamp(0, 5000)),
+        'emailed': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      return true;
     } catch (e) {
-      debugPrint('⚠️ Exception during email dispatch: $e');
+      debugPrint('❌ Support ticket could not be stored: $e');
       return false;
     }
   }
 
+  /// Premium signup alerts are raised by verifySubscriptionPayment once the
+  /// payment signature verifies, so there is nothing for the client to send.
+  /// Kept so existing call sites continue to compile and behave.
   Future<bool> sendPaymentNotification({
     required String name,
     required String email,
@@ -52,52 +103,6 @@ class EmailService {
     required String paymentId,
     String? subscriptionId,
   }) async {
-    final subject = '💳 New Premium Sign Up: $name';
-    final html = '''
-      <h2>🎉 New Brahma Journal Registration</h2>
-      <p>A user has successfully registered and activated a premium membership subscription.</p>
-      <hr/>
-      <p><b>User Details:</b></p>
-      <ul>
-        <li><b>Name:</b> $name</li>
-        <li><b>Email:</b> $email</li>
-        <li><b>Plan Selected:</b> ${planSelected.toUpperCase()}</li>
-      </ul>
-      <p><b>Payment References:</b></p>
-      <ul>
-        <li><b>Payment ID:</b> $paymentId</li>
-        <li><b>Subscription ID:</b> ${subscriptionId ?? 'One-time Test Fallback'}</li>
-      </ul>
-      <br/>
-      <p>Namaste,<br/>Brahma Journal Bot</p>
-    ''';
-    return await sendEmail(subject: subject, htmlContent: html);
-  }
-
-  Future<bool> sendSupportQuery({
-    required String name,
-    required String email,
-    required String category,
-    required String message,
-  }) async {
-    final subject = '✉️ Support Ticket: [$category] from $name';
-    final html = '''
-      <h2>✉️ New Helpdesk Submission</h2>
-      <p>A user has submitted a query / feedback through the Support Center in the mobile app.</p>
-      <hr/>
-      <p><b>Ticket Details:</b></p>
-      <ul>
-        <li><b>User Name:</b> $name</li>
-        <li><b>User Email:</b> $email</li>
-        <li><b>Category:</b> $category</li>
-      </ul>
-      <p><b>Message:</b></p>
-      <blockquote style="background: #f3f4f6; padding: 12px; border-left: 4px solid #4f46e5; font-style: italic;">
-        ${message.replaceAll('\n', '<br/>')}
-      </blockquote>
-      <br/>
-      <p>Reply directly to the user at: <a href="mailto:$email">$email</a></p>
-    ''';
-    return await sendEmail(subject: subject, htmlContent: html);
+    return true;
   }
 }

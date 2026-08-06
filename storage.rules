@@ -1,0 +1,55 @@
+rules_version = '2';
+
+// Brahma Journal — Cloud Storage rules
+//
+// There was no rules file at all before this, so the bucket ran on whatever
+// default the console last applied — in practice open enough that anyone with
+// the (public) Firebase config could list, read, and overwrite objects. Now
+// that avatars live here, that would mean any user replacing any other user's
+// profile picture, or uploading arbitrary files to your bucket at your expense.
+//
+// Everything is denied unless a rule below allows it.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.get('admin', false) == true;
+    }
+
+    // Avatars are displayed on the Community leaderboard, so any signed-in
+    // member may read them — but only the owner may write their own, and the
+    // path itself is keyed by uid so ownership is structural rather than
+    // something the client asserts in a field.
+    match /avatars/{userId}/{fileName} {
+      allow read: if isSignedIn();
+
+      allow write: if isSignedIn()
+                   && request.auth.uid == userId
+                   // 5 MB ceiling: an unbounded upload path is a way to run up
+                   // a storage bill on someone else's project.
+                   && request.resource.size < 5 * 1024 * 1024
+                   // Images only. Without this, the bucket becomes free file
+                   // hosting for whatever anyone wants to serve from your
+                   // domain — including HTML, which browsers would execute.
+                   && request.resource.contentType.matches('image/(jpeg|png|webp)');
+
+      allow delete: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+    }
+
+    // Product cover art and any other operator-managed media.
+    match /public/{allPaths=**} {
+      allow read: if true;
+      allow write, delete: if isAdmin();
+    }
+
+    // Anything not matched above is denied.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

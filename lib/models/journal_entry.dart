@@ -90,7 +90,12 @@ class JournalEntry {
       bestMoment: data['bestMoment'] ?? '',
       shivBabaLine: data['shivBabaLine'] ?? '',
       sleepReflection: data['sleepReflection'] ?? '',
-      createdAt: _parseDateTime(data['createdAt'], DateTime.now()),
+      // clientCreatedAt covers the window where the server stamp is still
+      // pending — without it a fresh entry falls back to "now", which is right
+      // by luck today and wrong for anything written offline yesterday.
+      createdAt: data['createdAt'] != null
+          ? _parseDateTime(data['createdAt'], DateTime.now())
+          : _parseDateTime(data['clientCreatedAt'], DateTime.now()),
       updatedAt: data['updatedAt'] != null ? _parseDateTime(data['updatedAt'], DateTime.now()) : null,
     );
   }

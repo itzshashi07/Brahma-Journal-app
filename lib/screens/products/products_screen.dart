@@ -2,14 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/product_service.dart';
 import '../../services/purchase_service.dart';
+import '../../services/backend_service.dart';
 import '../../models/product.dart';
-import '../../models/purchase.dart';
 import '../../core/theme/app_theme.dart';
+import 'pdf_reader_screen.dart';
 
 class ProductsScreen extends StatefulWidget {
   const ProductsScreen({super.key});
@@ -21,10 +21,12 @@ class ProductsScreen extends StatefulWidget {
 class _ProductsScreenState extends State<ProductsScreen> {
   final ProductService _productService = ProductService();
   final PurchaseService _purchaseService = PurchaseService();
+  final BackendService _backend = BackendService();
   late Razorpay _razorpay;
 
-  // Store the product being purchased during the payment flow
+  // Store the product and server-issued order being paid for
   Product? _pendingProduct;
+  String? _pendingOrderId;
 
   @override
   void initState() {
@@ -43,47 +45,54 @@ class _ProductsScreenState extends State<ProductsScreen> {
 
   // ─── Razorpay Handlers ─────────────────────────────────────────────────────
 
+  /// Completes a product purchase.
+  ///
+  /// The app used to write the purchase record itself here, straight from the
+  /// Razorpay client callback, and then open the download link it already had
+  /// in hand. Nothing verified that money had changed hands, and Firestore
+  /// rules accepted the record — so a member could fabricate a purchase and
+  /// unlock any paid book for free.
+  ///
+  /// Now the signature goes to `verifyProductPayment`, which checks the HMAC
+  /// against the Razorpay secret on the server, writes the purchase record with
+  /// the Admin SDK, and only then returns the download link. If the signature
+  /// does not verify, no record is written and no link comes back.
   void _handlePaymentSuccess(PaymentSuccessResponse response) async {
-    final auth = context.read<AuthProvider>();
     final product = _pendingProduct;
-    if (product == null || auth.user == null) return;
+    final orderId = response.orderId ?? _pendingOrderId;
+    _pendingProduct = null;
+    _pendingOrderId = null;
 
-    // Parse price: "₹299" → 299.0
-    final priceStr = product.price.replaceAll(RegExp(r'[^\d.]'), '');
-    final amount = double.tryParse(priceStr) ?? 0.0;
+    if (product == null || orderId == null) return;
 
-    // Save purchase record
-    final purchase = Purchase(
-      id: '',
-      userId: auth.user!.uid,
-      userEmail: auth.user!.email ?? '',
-      userName: auth.profile?.name ?? 'User',
-      productId: product.id,
-      productTitle: product.title,
-      pdfLink: product.pdfLink,
-      amountPaid: amount,
-      razorpayPaymentId: response.paymentId ?? '',
-      purchasedAt: DateTime.now(),
-    );
-
+    String? pdfLink;
     try {
-      await _purchaseService.createPurchase(purchase);
+      pdfLink = await _purchaseService.completePurchase(
+        productId: product.id,
+        orderId: orderId,
+        paymentId: response.paymentId ?? '',
+        signature: response.signature ?? '',
+      );
     } catch (e) {
-      debugPrint('⚠️ Purchase save error: $e');
+      debugPrint('⚠️ Purchase verification failed: $e');
     }
 
-    // Send confirmation email (non-blocking)
-    _purchaseService.sendPurchaseEmail(
-      toEmail: auth.user!.email ?? '',
-      userName: auth.profile?.name ?? 'User',
-      productTitle: product.title,
-      pdfLink: product.pdfLink,
-      amountPaid: amount,
-    );
-
-    _pendingProduct = null;
-
     if (!mounted) return;
+
+    if (pdfLink == null || pdfLink.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'We could not confirm that payment. If you were charged, contact support and we will sort it out.',
+            style: TextStyle(fontFamily: 'Outfit'),
+          ),
+          backgroundColor: const Color(0xFFB91C1C),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+      return;
+    }
 
     // Show success banner
     ScaffoldMessenger.of(context).showSnackBar(
@@ -105,8 +114,41 @@ class _ProductsScreenState extends State<ProductsScreen> {
       ),
     );
 
-    // Open the PDF/Drive link
-    await _launchURL(product.pdfLink);
+    // Open in the in-app reader rather than a browser, so the freshly
+    // purchased book gets the same no-download treatment as every other read.
+    _openReader(product.title, pdfLink);
+  }
+
+  /// Fetches the link from the product's protected subdocument and opens the
+  /// book in the in-app reader. Firestore returns the link only if this account
+  /// actually has access, so an entitlement bug shows up as a refusal rather
+  /// than a leaked asset.
+  ///
+  /// Reading happens inside the app rather than in a browser: the file is
+  /// fetched into private cache, shown page by page with no share or save
+  /// control, and deleted when the reader closes.
+  Future<void> _openSecureLink(Product product) async {
+    final link = await _productService.fetchSecureLink(product.id);
+    if (!mounted) return;
+    if (link == null || link.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This resource is not available for your account.',
+              style: TextStyle(fontFamily: 'Outfit')),
+          backgroundColor: Color(0xFFB91C1C),
+        ),
+      );
+      return;
+    }
+    _openReader(product.title, link);
+  }
+
+  void _openReader(String title, String link) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PdfReaderScreen(title: title, link: link),
+      ),
+    );
   }
 
   void _handlePaymentError(PaymentFailureResponse response) {
@@ -131,20 +173,39 @@ class _ProductsScreenState extends State<ProductsScreen> {
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
-  Future<void> _launchURL(String urlString) async {
-    final Uri url = Uri.parse(urlString);
-    try {
-      if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
-        throw 'Could not launch $urlString';
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Could not open link: $e', style: const TextStyle(fontFamily: 'Outfit')),
-            backgroundColor: Colors.redAccent,
+  Future<void> _confirmDeleteProduct(BuildContext context, String productId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.bgCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Delete Resource?', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary)),
+        content: const Text('Are you sure you want to permanently delete this library book/PDF?', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
           ),
-        );
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      try {
+        await _productService.deleteProduct(productId);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Library resource deleted.', style: TextStyle(fontFamily: 'Outfit')), backgroundColor: Colors.green),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to delete: $e'), backgroundColor: Colors.redAccent),
+          );
+        }
       }
     }
   }
@@ -156,25 +217,57 @@ class _ProductsScreenState extends State<ProductsScreen> {
     return (amount * 100).toInt();
   }
 
-  void _openRazorpayCheckout(Product product, AuthProvider auth) {
-    _pendingProduct = product;
-    final paise = _toPaise(product.price);
+  /// Opens checkout for a product.
+  ///
+  /// Two things changed. The Razorpay key id used to be a literal in this
+  /// method and is now returned by the server, so rotating it no longer
+  /// requires shipping a new build. More importantly the
+  /// amount was computed in the app from the displayed price string — a patched
+  /// client could pay ₹1 for a ₹999 book. The order is now created server-side
+  /// with the amount read from the product document, and the payment is
+  /// verified against that order.
+  void _openRazorpayCheckout(Product product, AuthProvider auth) async {
+    try {
+      final order = await _backend.createProductOrder(product.id);
+      if (order == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Checkout is unavailable right now. Please try again.',
+                style: TextStyle(fontFamily: 'Outfit')),
+            backgroundColor: Color(0xFFB91C1C),
+          ),
+        );
+        return;
+      }
 
-    final options = {
-      'key': 'rzp_test_TLnQaVy5GEHFPB',
-      'amount': paise,
-      'name': 'Brahma Journal',
-      'description': product.title,
-      'prefill': {
-        'contact': auth.profile?.phone ?? '',
-        'email': auth.user?.email ?? '',
-        'name': auth.profile?.name ?? '',
-      },
-      'theme': {
-        'color': '#6C63FF',
-      },
-    };
-    _razorpay.open(options);
+      _pendingProduct = product;
+      _pendingOrderId = order.orderId;
+
+      _razorpay.open({
+        'key': order.keyId,
+        'order_id': order.orderId,
+        'amount': order.amount,
+        'name': 'Brahma Journal',
+        'description': product.title,
+        'prefill': {
+          'contact': auth.profile?.phone ?? '',
+          'email': auth.user?.email ?? '',
+          'name': auth.profile?.name ?? '',
+        },
+        'theme': {
+          'color': '#6C63FF',
+        },
+      });
+    } on BackendException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.message, style: const TextStyle(fontFamily: 'Outfit')),
+          backgroundColor: const Color(0xFFB91C1C),
+        ),
+      );
+    }
   }
 
   // ─── Product Detail Bottom Sheet ─────────────────────────────────────────
@@ -352,7 +445,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                   label: auth.isAdmin ? 'Admin: Open PDF / Drive Link' : '📖 Open Your Book',
                   onTap: () {
                     Navigator.pop(ctx);
-                    _launchURL(product.pdfLink);
+                    _openSecureLink(product);
                   },
                 ),
               ] else ...[
@@ -389,7 +482,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                   onTap: () {
                     Navigator.pop(ctx);
                     if (isFree) {
-                      _launchURL(product.pdfLink);
+                      _openSecureLink(product);
                     } else {
                       _openRazorpayCheckout(product, auth);
                     }
@@ -536,7 +629,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                         crossAxisCount: 2,
                         crossAxisSpacing: 16,
                         mainAxisSpacing: 16,
-                        childAspectRatio: 0.58,
+                        childAspectRatio: 0.55,
                       ),
                       itemCount: products.length,
                       itemBuilder: (context, index) {
@@ -603,6 +696,26 @@ class _ProductsScreenState extends State<ProductsScreen> {
                             : Container(color: AppTheme.bgCardLight, child: const Icon(Icons.book, color: AppTheme.primary, size: 40)),
                       ),
                     ),
+                    if (auth.isAdmin)
+                      Positioned(
+                        top: 8,
+                        left: 8,
+                        child: GestureDetector(
+                          onTap: () => _confirmDeleteProduct(context, product.id),
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: Colors.redAccent.withOpacity(0.9),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.delete_outline,
+                              color: Colors.white,
+                              size: 14,
+                            ),
+                          ),
+                        ),
+                      ),
                     // Lock / Free badge overlay
                     Positioned(
                       top: 8,
@@ -667,7 +780,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                           const SizedBox(height: 3),
                           Text(
                             product.description,
-                            maxLines: 2,
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               fontFamily: 'Outfit',

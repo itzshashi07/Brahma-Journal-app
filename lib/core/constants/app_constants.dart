@@ -1,5 +1,3 @@
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-
 class AppConstants {
   // App Info
   static const String appName = 'Brahma Journal';
@@ -92,13 +90,68 @@ class AppConstants {
   // Firebase Storage Paths
   static const String meditationSoundsPath = 'meditation_sounds';
 
-  // Razorpay API Configurations
-  static String get razorpayKey => dotenv.env['RAZORPAY_KEY'] ?? 'rzp_test_rKqFqKqFqKqFqK';
-  static String get razorpaySecret => dotenv.env['RAZORPAY_SECRET'] ?? 'YOUR_RAZORPAY_SECRET';
-  static String get monthlyPlanId => dotenv.env['MONTHLY_PLAN_ID'] ?? 'plan_M1pXaBcDefGhIj';
-  static String get annualPlanId => dotenv.env['ANNUAL_PLAN_ID'] ?? 'plan_A2qYzAbCdeFghI';
+  // ───────────────────────── launch configuration ─────────────────────────
 
-  // Email Notification Configurations
-  static String get resendApiKey => dotenv.env['RESEND_API_KEY'] ?? '';
-  static String get adminEmail => dotenv.env['ADMIN_EMAIL'] ?? 'officialshashi2023@gmail.com';
+  /// Master switch for paid membership.
+  ///
+  /// While this is false, signing up is free and no checkout is shown. All the
+  /// Razorpay code — subscription creation, HMAC verification, entitlement
+  /// writes — is deliberately left in place and unmodified; it is simply not
+  /// reached. Flip this back to true and the paid flow returns exactly as it
+  /// was, with no code to rewrite.
+  ///
+  /// This also happens to remove the app's dependency on Cloud Functions for
+  /// registration, which is what was blocking signup while the project sits on
+  /// the Spark plan.
+  static const bool paymentsEnabled = false;
+
+  /// Everything is free for everyone until this moment.
+  ///
+  /// Three months from the 7 August 2026 launch. Stored as UTC so a device in
+  /// another timezone counts down to the same instant. To extend the window,
+  /// change this date and ship a build — or set `freeUntil` (an ISO-8601
+  /// string) on the `app_config/access` document, which takes precedence and
+  /// needs no release.
+  static final DateTime freeAccessUntil = DateTime.utc(2026, 11, 7, 23, 59, 59);
+
+  /// Whether the free window is still open.
+  static bool get isFreeAccessActive => DateTime.now().toUtc().isBefore(freeAccessUntil);
+
+  // Firestore collections owned by the server
+  static const String leaderboardCollection = 'leaderboard';
+  static const String purchasesCollection = 'purchases';
+
+  /// TRANSITIONAL — remove once custom claims are issued.
+  ///
+  /// Admin is a server-minted custom claim, but there is no in-app way to mint
+  /// the *first* one (that would be an escalation hole), so it needs
+  /// functions/scripts/bootstrap-admin.js run once with a service-account key.
+  /// Until that happens nobody holds the claim and every admin control is
+  /// invisible, so this address is accepted as a fallback.
+  ///
+  /// This is not the old vulnerability returning. That was a hardcoded
+  /// *password* shipping in the APK, which let anyone sign in as the operator.
+  /// An email address is not a credential: it is compared against the address
+  /// inside a Firebase-signed ID token, which cannot be forged, and Firebase
+  /// enforces address uniqueness so no other account can claim it. The same
+  /// check is what your currently-deployed rules already use.
+  ///
+  /// After running the bootstrap script, delete this constant and the matching
+  /// `isConfiguredAdminEmail()` branch in firestore.rules.
+  static const String adminEmail = 'officialshashi2023@gmail.com';
+
+  // NOTE — deliberately no secrets here.
+  //
+  // This class used to expose `razorpaySecret`, `resendApiKey`, plan ids and a
+  // hardcoded admin email, all read from a .env file that pubspec.yaml bundled
+  // as a Flutter asset. An asset is packaged verbatim into the APK, so every
+  // one of those values could be read with `unzip app-release.apk` — no
+  // rooting and no reverse engineering required. The Razorpay secret granted
+  // full access to the merchant account and the Resend key allowed sending
+  // mail as the brand to this app's own users.
+  //
+  // Those operations now run in Cloud Functions with the credentials held in
+  // Secret Manager; the app reaches them through BackendService. The only
+  // Razorpay value the client ever sees is the publishable key id, and it is
+  // handed back by the server at checkout time rather than compiled in.
 }

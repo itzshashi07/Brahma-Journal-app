@@ -15,12 +15,16 @@ class JournalProvider extends ChangeNotifier {
   int get streak => _streak;
   bool get loading => _loading;
 
+  /// Loads the user's entries once and derives today's entry and the streak
+  /// from that single result. Previously each of the three ran its own
+  /// identical Firestore query, so the screen showed stale/blank stats while
+  /// two redundant round trips finished.
   Future<void> loadEntries(String uid) async {
     _loading = true;
     notifyListeners();
     _entries = await _service.getEntries(uid);
-    _todaysEntry = await _service.getTodaysEntry(uid);
-    _streak = await _service.calculateStreak(uid);
+    _todaysEntry = _service.todaysEntryFrom(_entries);
+    _streak = _service.streakForEntries(_entries);
     _loading = false;
     notifyListeners();
   }

@@ -50,6 +50,44 @@ class _BlogDetailScreenState extends State<BlogDetailScreen> {
     }
   }
 
+  Future<void> _confirmDeleteBlog(BuildContext context, String blogId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.bgCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Delete Article?', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary)),
+        content: const Text('Are you sure you want to permanently delete this spiritual article?', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      try {
+        await _blogService.deleteBlog(blogId);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Article deleted successfully.', style: TextStyle(fontFamily: 'Outfit')), backgroundColor: Colors.green),
+          );
+          context.pop();
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to delete: $e'), backgroundColor: Colors.redAccent),
+          );
+        }
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
@@ -107,6 +145,13 @@ class _BlogDetailScreenState extends State<BlogDetailScreen> {
                             textAlign: TextAlign.center,
                           ),
                         ),
+                        if (auth.isAdmin) ...[
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                            onPressed: () => _confirmDeleteBlog(context, blog.id),
+                          ),
+                          const SizedBox(width: 4),
+                        ],
                         IconButton(
                           icon: const Icon(Icons.share_outlined, color: AppTheme.textPrimary, size: 20),
                           onPressed: () {

@@ -2,9 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../services/profile_service.dart';
 
-import '../../services/journal_service.dart';
 import '../../models/user_profile.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/stats_utils.dart';
+import '../../widgets/profile_avatar.dart';
+import 'package:provider/provider.dart';
+import '../../providers/auth_provider.dart';
+import '../../services/community_service.dart';
 
 class CommunityScreen extends StatefulWidget {
   const CommunityScreen({super.key});
@@ -15,9 +19,11 @@ class CommunityScreen extends StatefulWidget {
 
 class _CommunityScreenState extends State<CommunityScreen> {
   final ProfileService _profileService = ProfileService();
-  final JournalService _journalService = JournalService();
   List<_CommunityMember> _members = [];
   bool _isLoading = true;
+  String? _error;
+  String? _currentUid;
+  bool _rebuilding = false;
 
   @override
   void initState() {
@@ -28,27 +34,190 @@ class _CommunityScreenState extends State<CommunityScreen> {
   }
 
   Future<void> _loadCommunity() async {
-    setState(() => _isLoading = true);
-    final profiles = await _profileService.getAllProfiles();
-    final members = await Future.wait(profiles.map((p) async {
-      try {
-        final streak = await _journalService.calculateStreak(p.uid);
-        return _CommunityMember(profile: p, streak: streak, badges: _generateBadges(streak));
-      } catch (_) {
-        return _CommunityMember(profile: p, streak: 0, badges: []);
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    final auth = context.read<AuthProvider>();
+    _currentUid = auth.user?.uid;
+
+    try {
+      // Recompute the signed-in member's stats first so their own row is right
+      // the moment the board renders. Other members' numbers are refreshed by
+      // their own devices — the leaderboard only ever reads them here.
+      if (_currentUid != null) {
+        await _profileService.syncProfileStats(_currentUid!);
       }
-    }));
-    members.sort((a, b) => b.streak.compareTo(a.streak));
-    setState(() { _members = members; _isLoading = false; });
+
+      final profiles = await _profileService.getLeaderboard();
+      final members = profiles.map(_toMember).toList()..sort(_byStreak);
+
+      if (!mounted) return;
+      setState(() {
+        _members = members;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Could not load the leaderboard. Check your connection and try again.';
+        _isLoading = false;
+      });
+      print('❌ Community load failed: $e');
+    }
   }
 
+  _CommunityMember _toMember(UserProfile p) => _CommunityMember(
+        profile: p,
+        // currentStreak, not the raw stored value: a member who stopped
+        // practising can't rewrite their own profile from here, so their streak
+        // is aged out on read instead of freezing at the top of the board.
+        streak: p.currentStreak,
+        // Badges come off the best streak ever reached — an earned milestone
+        // shouldn't vanish the first day someone misses.
+        badges: _generateBadges(
+          p.longestStreak > p.currentStreak ? p.longestStreak : p.currentStreak,
+        ),
+        totalMeditationSeconds: p.totalMeditationSeconds,
+        totalJournalEntries: p.totalJournalEntries,
+        isActiveToday: p.isActiveToday,
+      );
+
+  /// Rank by streak, then by the practice behind it.
+  int _byStreak(_CommunityMember a, _CommunityMember b) {
+    final streakCmp = b.streak.compareTo(a.streak);
+    if (streakCmp != 0) return streakCmp;
+    final medCmp = b.totalMeditationSeconds.compareTo(a.totalMeditationSeconds);
+    if (medCmp != 0) return medCmp;
+    final entryCmp = b.totalJournalEntries.compareTo(a.totalJournalEntries);
+    if (entryCmp != 0) return entryCmp;
+    // Stable last resort so ranks don't shuffle between refreshes.
+    return a.profile.displayName.toLowerCase().compareTo(b.profile.displayName.toLowerCase());
+  }
+
+  int get _topStreak => _members.isEmpty ? 0 : _members.first.streak;
+  int get _activeToday => _members.where((m) => m.isActiveToday).length;
+
+  /// Admin-only: repopulate the board from every member's profile.
+  ///
+  /// Rows are normally written by their owner's device, so anyone who has not
+  /// opened the app since the leaderboard was introduced is missing from it.
+  /// This pulls them all in at once.
+  Future<void> _rebuildLeaderboard() async {
+    setState(() => _rebuilding = true);
+    try {
+      final count = await _profileService.rebuildLeaderboard();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Leaderboard rebuilt — $count members',
+              style: const TextStyle(fontFamily: 'Outfit')),
+          backgroundColor: AppTheme.success,
+        ),
+      );
+      await _loadCommunity();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not rebuild the leaderboard.',
+              style: TextStyle(fontFamily: 'Outfit')),
+          backgroundColor: AppTheme.danger,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _rebuilding = false);
+    }
+  }
+
+  /// Highest milestone first — the card only has room for two, and a Centurion
+  /// showing off "First Step" was not the intent.
   List<String> _generateBadges(int streak) {
     final badges = <String>[];
-    if (streak >= 1) badges.add('First Step');
-    if (streak >= 7) badges.add('7-Day Streak');
-    if (streak >= 30) badges.add('30-Day Master');
     if (streak >= 100) badges.add('Centurion');
+    if (streak >= 30) badges.add('30-Day Master');
+    if (streak >= 7) badges.add('7-Day Streak');
+    if (streak >= 1) badges.add('First Step');
     return badges;
+  }
+
+  void _shareLeaderboard() async {
+    final auth = context.read<AuthProvider>();
+    if (auth.user == null || _members.isEmpty) return;
+
+    final topMember = _members.first;
+    final topStreak = topMember.streak;
+
+    final content = '🏆 *Spiritual Leaderboard Celebration!* 🌟\n'
+        '- Top Streak seeker: ${topMember.profile.displayName} with $topStreak days! 🔥\n'
+        '- Seekers practising today: $_activeToday of ${_members.length} 🙏\n'
+        '- Keep logging your reflections and finding quiet moments. We are in this together! ✨';
+
+    try {
+      await CommunityService().saveAnonymousThought(content, auth.user!.uid);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Leaderboard shared to Community feed! 🏆', style: TextStyle(fontFamily: 'Outfit')),
+          backgroundColor: AppTheme.primary,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not share the leaderboard. Please try again.', style: TextStyle(fontFamily: 'Outfit')),
+          backgroundColor: Color(0xFFB91C1C),
+        ),
+      );
+      print('❌ Share leaderboard failed: $e');
+    }
+  }
+
+  Widget _buildBody() {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator(color: AppTheme.primary));
+    }
+
+    if (_error != null) {
+      return _CommunityMessage(
+        icon: Icons.cloud_off_outlined,
+        title: 'Leaderboard unavailable',
+        message: _error!,
+        actionLabel: 'Try again',
+        onAction: _loadCommunity,
+      );
+    }
+
+    if (_members.isEmpty) {
+      return _CommunityMessage(
+        icon: Icons.groups_outlined,
+        title: 'No seekers yet',
+        message: 'Write your first reflection to open the leaderboard.',
+        actionLabel: 'Refresh',
+        onAction: _loadCommunity,
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadCommunity,
+      color: AppTheme.primary,
+      backgroundColor: AppTheme.bgCard,
+      child: ListView.builder(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        physics: const AlwaysScrollableScrollPhysics(),
+        itemCount: _members.length,
+        itemBuilder: (ctx, i) {
+          final m = _members[i];
+          return _MemberCard(
+            member: m,
+            rank: i + 1,
+            isCurrentUser: m.profile.uid == _currentUid,
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -68,6 +237,17 @@ class _CommunityScreenState extends State<CommunityScreen> {
                     const Expanded(
                       child: Text('Community', style: TextStyle(fontFamily: 'Outfit', fontSize: 20, fontWeight: FontWeight.w600, color: AppTheme.textPrimary), textAlign: TextAlign.center),
                     ),
+                    if (context.watch<AuthProvider>().isAdmin)
+                      IconButton(
+                        tooltip: 'Rebuild leaderboard',
+                        icon: _rebuilding
+                            ? const SizedBox(
+                                width: 18, height: 18,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: AppTheme.primary))
+                            : const Icon(Icons.sync, color: AppTheme.primary),
+                        onPressed: _rebuilding ? null : _rebuildLeaderboard,
+                      ),
                     IconButton(icon: const Icon(Icons.refresh, color: AppTheme.textMuted), onPressed: _loadCommunity),
                   ],
                 ),
@@ -87,12 +267,12 @@ class _CommunityScreenState extends State<CommunityScreen> {
                     children: [
                       _HeaderStat(value: '${_members.length}', label: 'Members'),
                       Container(width: 1, height: 40, color: Colors.white30),
-                      _HeaderStat(value: '${_members.where((m) => m.streak > 0).length}', label: 'Active Today'),
+                      // Active today means they actually journalled or
+                      // meditated today — a live streak from yesterday isn't
+                      // the same thing.
+                      _HeaderStat(value: '$_activeToday', label: 'Active Today'),
                       Container(width: 1, height: 40, color: Colors.white30),
-                      _HeaderStat(
-                        value: _members.isEmpty ? '0' : '${_members.first.streak}',
-                        label: 'Top Streak',
-                      ),
+                      _HeaderStat(value: '$_topStreak', label: 'Top Streak'),
                     ],
                   ),
                 ),
@@ -105,6 +285,13 @@ class _CommunityScreenState extends State<CommunityScreen> {
                 child: Row(
                   children: [
                     const Text('Leaderboard', style: TextStyle(fontFamily: 'Outfit', fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.share_outlined, size: 18, color: AppTheme.primary),
+                      onPressed: _shareLeaderboard,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
                     const Spacer(),
                     Text('${_members.length} seekers', style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.textMuted, fontSize: 12)),
                   ],
@@ -112,19 +299,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
               ),
               const SizedBox(height: 12),
 
-              if (_isLoading)
-                const Expanded(child: Center(child: CircularProgressIndicator(color: AppTheme.primary)))
-              else
-                Expanded(
-                  child: ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    itemCount: _members.length,
-                    itemBuilder: (ctx, i) {
-                      final m = _members[i];
-                      return _MemberCard(member: m, rank: i + 1);
-                    },
-                  ),
-                ),
+              Expanded(child: _buildBody()),
             ],
           ),
         ),
@@ -137,7 +312,68 @@ class _CommunityMember {
   final UserProfile profile;
   final int streak;
   final List<String> badges;
-  _CommunityMember({required this.profile, required this.streak, required this.badges});
+  final int totalMeditationSeconds;
+  final int totalJournalEntries;
+  final bool isActiveToday;
+  _CommunityMember({
+    required this.profile,
+    required this.streak,
+    required this.badges,
+    required this.totalMeditationSeconds,
+    required this.totalJournalEntries,
+    required this.isActiveToday,
+  });
+}
+
+class _CommunityMessage extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String message;
+  final String actionLabel;
+  final VoidCallback onAction;
+
+  const _CommunityMessage({
+    required this.icon,
+    required this.title,
+    required this.message,
+    required this.actionLabel,
+    required this.onAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 44, color: AppTheme.textMuted),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              style: const TextStyle(fontFamily: 'Outfit', fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontFamily: 'Outfit', fontSize: 13, color: AppTheme.textMuted, height: 1.4),
+            ),
+            const SizedBox(height: 16),
+            TextButton.icon(
+              onPressed: onAction,
+              icon: const Icon(Icons.refresh, size: 16, color: AppTheme.primary),
+              label: Text(
+                actionLabel,
+                style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.primary, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _HeaderStat extends StatelessWidget {
@@ -159,8 +395,9 @@ class _HeaderStat extends StatelessWidget {
 class _MemberCard extends StatelessWidget {
   final _CommunityMember member;
   final int rank;
+  final bool isCurrentUser;
 
-  const _MemberCard({required this.member, required this.rank});
+  const _MemberCard({required this.member, required this.rank, this.isCurrentUser = false});
 
   @override
   Widget build(BuildContext context) {
@@ -175,9 +412,13 @@ class _MemberCard extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: AppTheme.bgCard,
+        color: isCurrentUser ? AppTheme.primary.withOpacity(0.08) : AppTheme.bgCard,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: rank <= 3 ? rankColor.withOpacity(0.3) : const Color(0xFF2D2D4E)),
+        border: Border.all(
+          color: isCurrentUser
+              ? AppTheme.primary.withOpacity(0.5)
+              : (rank <= 3 ? rankColor.withOpacity(0.3) : const Color(0xFF2D2D4E)),
+        ),
       ),
       child: Row(
         children: [
@@ -205,13 +446,12 @@ class _MemberCard extends StatelessWidget {
           const SizedBox(width: 12),
 
           // Avatar
-          CircleAvatar(
-            radius: 20,
-            backgroundColor: AppTheme.primary.withOpacity(0.2),
-            child: Text(
-              member.profile.initials,
-              style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.primary, fontWeight: FontWeight.w700),
-            ),
+          ProfileAvatar(
+            avatarId: member.profile.avatarId,
+            initials: member.profile.initials,
+            size: 40,
+            showRing: rank <= 3,
+            ringColor: rankColor,
           ),
           const SizedBox(width: 12),
 
@@ -220,9 +460,59 @@ class _MemberCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(member.profile.displayName, style: const TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.w600, color: AppTheme.textPrimary, fontSize: 14)),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        member.profile.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.w600, color: AppTheme.textPrimary, fontSize: 14),
+                      ),
+                    ),
+                    if (isCurrentUser) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: AppTheme.primary.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Text('You', style: TextStyle(fontFamily: 'Outfit', fontSize: 9, fontWeight: FontWeight.w700, color: AppTheme.primary)),
+                      ),
+                    ],
+                    if (member.isActiveToday) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: const BoxDecoration(color: Color(0xFF10B981), shape: BoxShape.circle),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    const Icon(Icons.spa_outlined, size: 12, color: Color(0xFF0891B2)),
+                    const SizedBox(width: 4),
+                    Text(
+                      // formatDurationShort keeps short practices visible —
+                      // everything under 6 minutes used to render as "0.0h".
+                      formatDurationShort(member.totalMeditationSeconds),
+                      style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 11),
+                    ),
+                    const SizedBox(width: 10),
+                    const Icon(Icons.book_outlined, size: 12, color: AppTheme.primaryLight),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${member.totalJournalEntries}',
+                      style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 11),
+                    ),
+                  ],
+                ),
                 if (member.badges.isNotEmpty) ...[
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 6),
                   Wrap(
                     spacing: 4,
                     runSpacing: 4,

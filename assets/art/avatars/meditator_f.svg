@@ -1,0 +1,18 @@
+<!-- Seated figure in meditation, hair gathered. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <g stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="50" cy="28" r="10" fill="white" stroke="none"/>
+    <!-- gathered hair -->
+    <circle cx="50" cy="14" r="5" fill="white" stroke="none" opacity="0.9"/>
+    <path d="M40 26 C 40 18, 60 18, 60 26" opacity="0.85" stroke-width="2.4"/>
+    <!-- torso -->
+    <path d="M50 40 C 42 47, 39 57, 39 65"/>
+    <path d="M50 40 C 58 47, 61 57, 61 65"/>
+    <!-- arms -->
+    <path d="M42 49 C 32 55, 27 63, 26 69"/>
+    <path d="M58 49 C 68 55, 73 63, 74 69"/>
+    <!-- crossed legs -->
+    <path d="M26 69 C 34 79, 66 79, 74 69"/>
+    <path d="M33 73 C 42 67, 58 67, 67 73" opacity="0.7"/>
+  </g>
+</svg>

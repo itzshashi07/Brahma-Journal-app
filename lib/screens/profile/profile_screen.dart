@@ -5,6 +5,10 @@ import '../../providers/auth_provider.dart';
 import '../../services/profile_service.dart';
 import '../../models/user_profile.dart';
 import '../../core/theme/app_theme.dart';
+import '../../widgets/avatar_editor.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../../services/app_update_service.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -21,6 +25,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? _selectedGender;
   bool _isSaving = false;
   bool _isLoading = true;
+
+  Future<void> _launchWhatsApp() async {
+    final Uri url = Uri.parse('https://wa.me/918078633912');
+    try {
+      if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+        throw 'Could not launch WhatsApp';
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open WhatsApp: $e', style: const TextStyle(fontFamily: 'Outfit')), backgroundColor: Colors.redAccent),
+        );
+      }
+    }
+  }
 
   @override
   void initState() {
@@ -40,6 +59,82 @@ class _ProfileScreenState extends State<ProfileScreen> {
       }
     }
     setState(() => _isLoading = false);
+  }
+
+  /// Admin: announce the running build as the latest available.
+  ///
+  /// Existing installations check app_config/version on launch, so publishing
+  /// here is what actually triggers the update prompt on everyone's phone.
+  Future<void> _publishBuild() async {
+    final notesCtrl = TextEditingController();
+    var force = false;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          backgroundColor: AppTheme.bgCard,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Publish this build',
+              style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Everyone on an older build is prompted to update next time they open the app.',
+                style: TextStyle(fontFamily: 'Outfit', fontSize: 13, color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: notesCtrl,
+                maxLines: 3,
+                style: const TextStyle(color: AppTheme.textPrimary, fontFamily: 'Outfit'),
+                decoration: const InputDecoration(hintText: "What's new in this build?"),
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: force,
+                onChanged: (v) => setLocal(() => force = v ?? false),
+                title: const Text('Required update',
+                    style: TextStyle(fontFamily: 'Outfit', fontSize: 13, color: AppTheme.textPrimary)),
+                subtitle: const Text('Blocks the app until they update',
+                    style: TextStyle(fontFamily: 'Outfit', fontSize: 11, color: AppTheme.textMuted)),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Publish')),
+          ],
+        ),
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await AppUpdateService.publishCurrentBuild(
+        releaseNotes: notesCtrl.text.trim(),
+        forceUpdate: force,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Published. Everyone will be prompted on next open.',
+              style: TextStyle(fontFamily: 'Outfit')),
+          backgroundColor: AppTheme.success,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not publish. Are you signed in as admin?',
+              style: TextStyle(fontFamily: 'Outfit')),
+          backgroundColor: AppTheme.danger,
+        ),
+      );
+    }
   }
 
   Future<void> _saveProfile() async {
@@ -119,20 +214,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     padding: const EdgeInsets.all(20),
                     child: Column(
                       children: [
-                        // Avatar
-                        Container(
-                          width: 90, height: 90,
-                          decoration: BoxDecoration(
-                            gradient: AppTheme.primaryGradient,
-                            shape: BoxShape.circle,
-                            boxShadow: [BoxShadow(color: AppTheme.primary.withOpacity(0.4), blurRadius: 20, spreadRadius: 4)],
-                          ),
-                          child: Center(
-                            child: Text(
-                              profile?.initials ?? auth.user?.email?.substring(0, 1).toUpperCase() ?? 'S',
-                              style: const TextStyle(fontFamily: 'Outfit', fontSize: 36, fontWeight: FontWeight.w700, color: Colors.white),
-                            ),
-                          ),
+                        // Avatar — tap opens the spiritual avatar picker,
+                        // filtered by the gender selected further down.
+                        AvatarEditor(
+                          uid: auth.user!.uid,
+                          profile: profile,
+                          gender: _selectedGender,
+                          initials: profile?.initials ??
+                              auth.user?.email?.substring(0, 1).toUpperCase() ??
+                              'S',
+                          onUpdated: () => auth.refreshProfile(),
                         ),
                         const SizedBox(height: 12),
                         Text(
@@ -177,6 +268,48 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   ],
                               ),
                               const SizedBox(height: 20),
+                              // The walkthrough is worth more than a one-time
+                              // first-run screen — people forget the daily loop
+                              // after a week away, so it stays reachable.
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.system_update_outlined, color: AppTheme.primary),
+                                title: const Text('App Updates',
+                                    style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
+                                subtitle: const Text('Check for a newer version',
+                                    style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textMuted, fontSize: 11)),
+                                trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
+                                onTap: () => context.push('/app-updates'),
+                              ),
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.auto_stories_outlined, color: AppTheme.primary),
+                                title: const Text('How to use this app', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
+                                trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
+                                onTap: () => context.push('/how-to-use'),
+                              ),
+                              // Admin: announce the running build so every
+                              // installation is prompted to update on next open.
+                              if (auth.isAdmin)
+                                ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: const Icon(Icons.inbox_outlined, color: AppTheme.accent),
+                                  title: const Text('Support Inbox',
+                                      style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
+                                  subtitle: const Text('Messages from the Contact Us form',
+                                      style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textMuted, fontSize: 11)),
+                                  trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
+                                  onTap: () => context.push('/support-inbox'),
+                                ),
+                              if (auth.isAdmin)
+                                ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: const Icon(Icons.campaign_outlined, color: AppTheme.accent),
+                                  title: const Text('Publish this build as latest',
+                                      style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
+                                  trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
+                                  onTap: _publishBuild,
+                                ),
                               ListTile(
                                 contentPadding: EdgeInsets.zero,
                                 leading: const Icon(Icons.help_outline_outlined, color: AppTheme.primary),
@@ -212,12 +345,205 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ],
                           ),
                         ),
+                        if (auth.isAdmin) ...[
+                          const SizedBox(height: 20),
+                          _buildAdminPanel(context),
+                        ],
+                        const SizedBox(height: 30),
+                        // Share App Button
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () => AppUpdateService.shareApp(),
+                            icon: const Icon(Icons.share_outlined, size: 18),
+                            label: const Text('Share Brahma with Friends', style: TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.w600)),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppTheme.primary,
+                              side: const BorderSide(color: AppTheme.primary),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        Center(
+                          child: GestureDetector(
+                            onTap: _launchWhatsApp,
+                            child: Column(
+                              children: [
+                                const Text(
+                                  'Developed by Shashi Kumar',
+                                  style: TextStyle(
+                                    fontFamily: 'Outfit',
+                                    fontSize: 13,
+                                    color: AppTheme.textSecondary,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.chat_bubble_outline, size: 14, color: Color(0xFF10B981)),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      '+91 8078633912',
+                                      style: TextStyle(
+                                        fontFamily: 'Outfit',
+                                        fontSize: 12,
+                                        color: const Color(0xFF10B981),
+                                        fontWeight: FontWeight.bold,
+                                        decoration: TextDecoration.underline,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 20),
                       ],
                     ),
                   ),
                 ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAdminPanel(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.bgCard,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF2D2D4E)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.admin_panel_settings_outlined, color: AppTheme.primary, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Admin Control Panel',
+                style: TextStyle(
+                  fontFamily: 'Outfit',
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () => _showPushUpdateDialog(context),
+              icon: const Icon(Icons.cloud_upload_outlined, size: 16, color: Colors.white),
+              label: const Text('Push New App Release', style: TextStyle(fontFamily: 'Outfit', color: Colors.white)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primary,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showPushUpdateDialog(BuildContext context) {
+    final versionCtrl = TextEditingController(text: '1.0.1');
+    final buildCtrl = TextEditingController(text: '2');
+    final notesCtrl = TextEditingController(text: 'Bug fixes and performance improvements 🚀');
+    bool forceUpdate = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: AppTheme.bgCard,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Push New App Update', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: versionCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(labelText: 'Version (e.g. 1.0.1)'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: buildCtrl,
+                  keyboardType: TextInputType.number,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(labelText: 'Build Number (e.g. 2)'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: notesCtrl,
+                  maxLines: 2,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(labelText: 'Release Notes'),
+                ),
+                const SizedBox(height: 12),
+                CheckboxListTile(
+                  title: const Text('Force Update?', style: TextStyle(fontFamily: 'Outfit', color: Colors.white, fontSize: 14)),
+                  value: forceUpdate,
+                  onChanged: (val) {
+                    setDialogState(() {
+                      forceUpdate = val ?? false;
+                    });
+                  },
+                  activeColor: AppTheme.primary,
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () async {
+                try {
+                  final buildNum = int.tryParse(buildCtrl.text) ?? 1;
+                  await FirebaseFirestore.instance
+                      .collection('app_config')
+                      .doc('version')
+                      .set({
+                    'latest_version': versionCtrl.text.trim(),
+                    'latest_build': buildNum,
+                    'release_notes': notesCtrl.text.trim(),
+                    'force_update': forceUpdate,
+                    'download_url': 'https://appdistribution.firebase.google.com/testerapps/1:440787316408:android:38e64b73850e55b977ce4d',
+                    'updated_at': FieldValue.serverTimestamp(),
+                  }, SetOptions(merge: true));
+
+                  if (context.mounted) {
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Update published successfully! 🚀', style: TextStyle(fontFamily: 'Outfit')), backgroundColor: Colors.green),
+                    );
+                  }
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Error publishing: $e')),
+                  );
+                }
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+              child: const Text('Publish Release', style: TextStyle(color: Colors.white)),
+            ),
+          ],
         ),
       ),
     );

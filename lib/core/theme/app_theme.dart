@@ -26,6 +26,60 @@ class AppTheme {
   static const Color moodHappy = Color(0xFF10B981);
   static const Color moodVeryHappy = Color(0xFF06D6A0);
 
+  // ─────────────────────── design tokens ───────────────────────
+  //
+  // Added so spacing, radii and borders stop being magic numbers repeated
+  // across screens. The colour and gradient names above are unchanged — the
+  // rest of the app still references them directly.
+
+  /// Hairline that separates a card from the backdrop. Was written as the
+  /// literal 0xFF2D2D4E in ~40 places.
+  static const Color border = Color(0xFF2D2D4E);
+  static const Color borderSoft = Color(0xFF23233F);
+
+  /// Warm ink used behind sacred motifs — a hint of gold in the violet keeps
+  /// the dark theme from reading as cold blue-grey.
+  static const Color sacredGlow = Color(0xFF3B2A6B);
+  static const Color sacredInk = Color(0xFF14101F);
+
+  static const Color success = Color(0xFF10B981);
+  static const Color danger = Color(0xFFB91C1C);
+
+  // 4-point spacing scale.
+  static const double space1 = 4;
+  static const double space2 = 8;
+  static const double space3 = 12;
+  static const double space4 = 16;
+  static const double space5 = 20;
+  static const double space6 = 24;
+  static const double space8 = 32;
+  static const double space10 = 40;
+
+  // Corner radii.
+  static const double radiusSm = 10;
+  static const double radiusMd = 14;
+  static const double radiusLg = 20;
+  static const double radiusXl = 28;
+  static const double radiusPill = 999;
+
+  /// Soft ambient lift for raised surfaces. Dark themes need shadow that reads
+  /// as depth rather than dirt, so it is deep and very diffuse.
+  static List<BoxShadow> get shadowSoft => [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.45),
+          blurRadius: 24,
+          offset: const Offset(0, 8),
+        ),
+      ];
+
+  static List<BoxShadow> glow(Color color, {double strength = 0.35}) => [
+        BoxShadow(
+          color: color.withValues(alpha: strength),
+          blurRadius: 28,
+          spreadRadius: 2,
+        ),
+      ];
+
   // Gradient
   static const LinearGradient primaryGradient = LinearGradient(
     colors: [Color(0xFF7C3AED), Color(0xFF4338CA)],
@@ -123,15 +177,15 @@ class AppTheme {
         elevation: 0,
       ),
       textTheme: const TextTheme(
-        displayLarge: TextStyle(fontFamily: 'Outfit', color: textPrimary, fontWeight: FontWeight.w700),
-        displayMedium: TextStyle(fontFamily: 'Outfit', color: textPrimary, fontWeight: FontWeight.w600),
-        headlineLarge: TextStyle(fontFamily: 'Outfit', color: textPrimary, fontWeight: FontWeight.w700),
-        headlineMedium: TextStyle(fontFamily: 'Outfit', color: textPrimary, fontWeight: FontWeight.w600),
-        titleLarge: TextStyle(fontFamily: 'Outfit', color: textPrimary, fontWeight: FontWeight.w600),
-        titleMedium: TextStyle(fontFamily: 'Outfit', color: textPrimary, fontWeight: FontWeight.w500),
-        bodyLarge: TextStyle(fontFamily: 'Outfit', color: textPrimary),
-        bodyMedium: TextStyle(fontFamily: 'Outfit', color: textSecondary),
-        bodySmall: TextStyle(fontFamily: 'Outfit', color: textMuted),
+        displayLarge: TextStyle(fontFamily: 'Outfit', color: textPrimary, fontSize: 34, fontWeight: FontWeight.w700),
+        displayMedium: TextStyle(fontFamily: 'Outfit', color: textPrimary, fontSize: 30, fontWeight: FontWeight.w600),
+        headlineLarge: TextStyle(fontFamily: 'Outfit', color: textPrimary, fontSize: 26, fontWeight: FontWeight.w700),
+        headlineMedium: TextStyle(fontFamily: 'Outfit', color: textPrimary, fontSize: 22, fontWeight: FontWeight.w600),
+        titleLarge: TextStyle(fontFamily: 'Outfit', color: textPrimary, fontSize: 20, fontWeight: FontWeight.w600),
+        titleMedium: TextStyle(fontFamily: 'Outfit', color: textPrimary, fontSize: 18, fontWeight: FontWeight.w500),
+        bodyLarge: TextStyle(fontFamily: 'Outfit', color: textPrimary, fontSize: 18),
+        bodyMedium: TextStyle(fontFamily: 'Outfit', color: textSecondary, fontSize: 16),
+        bodySmall: TextStyle(fontFamily: 'Outfit', color: textMuted, fontSize: 14),
       ),
     );
   }
