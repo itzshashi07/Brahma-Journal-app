@@ -11,7 +11,9 @@ import '../../core/constants/app_constants.dart';
 import '../../core/utils/date_utils.dart';
 
 class MeditationScreen extends StatefulWidget {
-  const MeditationScreen({super.key});
+  /// Preselected session length, passed through when a guided theme is chosen.
+  final int? initialMinutes;
+  const MeditationScreen({super.key, this.initialMinutes});
 
   @override
   State<MeditationScreen> createState() => _MeditationScreenState();
@@ -19,7 +21,7 @@ class MeditationScreen extends StatefulWidget {
 
 class _MeditationScreenState extends State<MeditationScreen> with TickerProviderStateMixin {
   final MeditationService _service = MeditationService();
-  int _selectedDuration = 5;
+  late int _selectedDuration = widget.initialMinutes ?? 5;
   bool _isActive = false;
   bool _isCompleted = false;
   int _currentMantra = 0;

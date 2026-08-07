@@ -333,6 +333,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       children: [
                         _NavCard(icon: Icons.book_outlined, title: 'Journal', subtitle: 'Daily reflection', route: '/journal', color: AppTheme.primary),
                         _NavCard(icon: Icons.spa_outlined, title: 'Meditation', subtitle: 'Find inner peace', route: '/meditation', color: const Color(0xFF0891B2)),
+                        _NavCard(icon: Icons.menu_book_outlined, title: 'Gita in Real Life', subtitle: 'Wisdom for your situation', route: '/gita', color: const Color(0xFFF59E0B)),
                         _NavCard(icon: Icons.auto_awesome_outlined, title: 'Affirmations', subtitle: 'Positive mindset', route: '/affirmations', color: const Color(0xFF059669)),
                         _NavCard(icon: Icons.chat_bubble_outline_outlined, title: 'Thoughts', subtitle: 'Share anonymously', route: '/thoughts', color: const Color(0xFFD97706)),
                         _NavCard(icon: Icons.people_outline, title: 'Community', subtitle: 'Fellow seekers', route: '/community', color: const Color(0xFF7C3AED)),

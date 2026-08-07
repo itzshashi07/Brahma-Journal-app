@@ -18,6 +18,8 @@ import 'screens/auth/welcome_screen.dart';
 import 'screens/dashboard/dashboard_screen.dart';
 import 'screens/journal/journal_screen.dart';
 import 'screens/meditation/meditation_screen.dart';
+import 'screens/meditation/meditation_categories_screen.dart';
+import 'screens/gita/gita_screen.dart';
 import 'screens/affirmations/affirmations_screen.dart';
 import 'screens/community/community_screen.dart';
 import 'screens/anonymous_thoughts/anonymous_thoughts_screen.dart';
@@ -122,7 +124,7 @@ class BrahmaApp extends StatelessWidget {
           '/dashboard', '/journal', '/meditation', '/affirmations', '/thoughts',
           '/community', '/analytics', '/profile', '/support', '/blogs',
           '/products', '/notifications', '/announcements', '/how-to-use',
-          '/app-updates', '/support-inbox',
+          '/app-updates', '/support-inbox', '/gita',
         ];
         final isProtected = protectedRoutes.any((r) => loc.startsWith(r));
         if (isProtected && !isAuth) return '/welcome';
@@ -154,7 +156,19 @@ class BrahmaApp extends StatelessWidget {
             return JournalScreen(entry: entry);
           },
         ),
-        GoRoute(path: '/meditation', builder: (ctx, _) => const MeditationScreen()),
+        GoRoute(path: '/meditation', builder: (ctx, _) => const MeditationCategoriesScreen()),
+        GoRoute(
+          path: '/meditation/session',
+          builder: (ctx, state) => MeditationScreen(
+            initialMinutes: int.tryParse(state.uri.queryParameters['minutes'] ?? ''),
+          ),
+        ),
+        GoRoute(
+          path: '/meditation/theme/:id',
+          builder: (ctx, state) =>
+              MeditationThemeScreen(categoryId: state.pathParameters['id']!),
+        ),
+        GoRoute(path: '/gita', builder: (ctx, _) => const GitaScreen()),
         GoRoute(path: '/affirmations', builder: (ctx, _) => const AffirmationsScreen()),
         GoRoute(path: '/thoughts', builder: (ctx, _) => const AnonymousThoughtsScreen()),
         GoRoute(path: '/community', builder: (ctx, _) => const CommunityScreen()),

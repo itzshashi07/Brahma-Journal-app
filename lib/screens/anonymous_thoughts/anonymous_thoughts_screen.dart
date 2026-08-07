@@ -60,6 +60,48 @@ class _AnonymousThoughtsScreenState extends State<AnonymousThoughtsScreen> {
     }
   }
 
+  /// Admin moderation. Confirmed, because it cannot be undone and the author
+  /// has no way to repost what they wrote.
+  Future<void> _deleteThought(String thoughtId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.bgCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Remove this reflection?',
+            style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary)),
+        content: const Text(
+          'It will be deleted for everyone. This cannot be undone.',
+          style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text('Remove', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await _service.deleteThought(thoughtId);
+      await _loadThoughts();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not remove that reflection.',
+                style: TextStyle(fontFamily: 'Outfit')),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _replyToThought(String thoughtId) async {
     final ctrl = TextEditingController();
     final auth = context.read<AuthProvider>();
@@ -172,7 +214,12 @@ class _AnonymousThoughtsScreenState extends State<AnonymousThoughtsScreen> {
                       itemCount: _thoughts.length,
                       itemBuilder: (ctx, i) {
                         final t = _thoughts[i];
-                        return _ThoughtCard(thought: t, onReply: () => _replyToThought(t.id));
+                        return _ThoughtCard(
+                          thought: t,
+                          onReply: () => _replyToThought(t.id),
+                          canDelete: context.read<AuthProvider>().isAdmin,
+                          onDelete: () => _deleteThought(t.id),
+                        );
                       },
                     ),
                   ),
@@ -188,8 +235,15 @@ class _AnonymousThoughtsScreenState extends State<AnonymousThoughtsScreen> {
 class _ThoughtCard extends StatelessWidget {
   final AnonymousThought thought;
   final VoidCallback onReply;
+  final bool canDelete;
+  final VoidCallback onDelete;
 
-  const _ThoughtCard({required this.thought, required this.onReply});
+  const _ThoughtCard({
+    required this.thought,
+    required this.onReply,
+    this.canDelete = false,
+    required this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -220,6 +274,16 @@ class _ThoughtCard extends StatelessWidget {
                   Text(thought.anonymousName, style: TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.w600, fontSize: 13, color: color)),
                   Row(
                     children: [
+                      if (canDelete) ...[
+                        GestureDetector(
+                          onTap: onDelete,
+                          child: const Padding(
+                            padding: EdgeInsets.only(right: 8),
+                            child: Icon(Icons.delete_outline_rounded,
+                                size: 15, color: Colors.redAccent),
+                          ),
+                        ),
+                      ],
                       Text(AppDateUtils.formatRelative(thought.createdAt), style: const TextStyle(fontFamily: 'Outfit', fontSize: 11, color: AppTheme.textMuted)),
                       const SizedBox(width: 6),
                       // Reflections vanish after a week. Saying so on the card

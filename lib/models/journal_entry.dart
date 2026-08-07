@@ -15,6 +15,15 @@ class JournalEntry {
   final String bestMoment;
   final String shivBabaLine;
   final String sleepReflection;
+
+  // Tap-to-select fields. Stored as id lists so they can be aggregated later
+  // (which practices correlate with better moods) in a way free text cannot.
+  final String energyLevel;
+  final List<String> practices;
+  final List<String> influences;
+  final List<String> habitsDone;
+  final List<String> challenges;
+
   final DateTime createdAt;
   final DateTime? updatedAt;
 
@@ -33,6 +42,11 @@ class JournalEntry {
     this.bestMoment = '',
     this.shivBabaLine = '',
     this.sleepReflection = '',
+    this.energyLevel = '',
+    this.practices = const [],
+    this.influences = const [],
+    this.habitsDone = const [],
+    this.challenges = const [],
     required this.createdAt,
     this.updatedAt,
   });
@@ -90,6 +104,11 @@ class JournalEntry {
       bestMoment: data['bestMoment'] ?? '',
       shivBabaLine: data['shivBabaLine'] ?? '',
       sleepReflection: data['sleepReflection'] ?? '',
+      energyLevel: data['energyLevel'] ?? '',
+      practices: List<String>.from(data['practices'] ?? const []),
+      influences: List<String>.from(data['influences'] ?? const []),
+      habitsDone: List<String>.from(data['habitsDone'] ?? const []),
+      challenges: List<String>.from(data['challenges'] ?? const []),
       // clientCreatedAt covers the window where the server stamp is still
       // pending — without it a fresh entry falls back to "now", which is right
       // by luck today and wrong for anything written offline yesterday.
@@ -115,6 +134,11 @@ class JournalEntry {
       'bestMoment': bestMoment,
       'shivBabaLine': shivBabaLine,
       'sleepReflection': sleepReflection,
+      'energyLevel': energyLevel,
+      'practices': practices,
+      'influences': influences,
+      'habitsDone': habitsDone,
+      'challenges': challenges,
     };
   }
 

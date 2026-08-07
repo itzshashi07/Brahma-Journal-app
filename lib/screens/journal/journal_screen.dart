@@ -8,6 +8,8 @@ import '../../core/theme/app_theme.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/utils/date_utils.dart';
 import '../../widgets/voice_input_button.dart';
+import '../../widgets/journal_chips.dart';
+import '../../core/constants/journal_options.dart';
 
 class JournalScreen extends StatefulWidget {
   final JournalEntry? entry;
@@ -34,6 +36,13 @@ class _JournalScreenState extends State<JournalScreen> {
   final _bestMomentCtrl = TextEditingController();
   final _shivBabaLineCtrl = TextEditingController();
   final _sleepReflectionCtrl = TextEditingController();
+
+  // Tap-to-select state.
+  Set<String> _energy = {};
+  Set<String> _practices = {};
+  Set<String> _influences = {};
+  Set<String> _habits = {};
+  Set<String> _challenges = {};
 
   bool get _isReadOnly {
     if (widget.entry == null) return false;
@@ -71,6 +80,11 @@ class _JournalScreenState extends State<JournalScreen> {
       _triggerResponseCtrl.text = target.triggerResponse;
       _bestMomentCtrl.text = target.bestMoment;
       _shivBabaLineCtrl.text = target.shivBabaLine;
+      _energy = target.energyLevel.isEmpty ? {} : {target.energyLevel};
+      _practices = target.practices.toSet();
+      _influences = target.influences.toSet();
+      _habits = target.habitsDone.toSet();
+      _challenges = target.challenges.toSet();
       _sleepReflectionCtrl.text = target.sleepReflection;
     }
     setState(() => _isLoading = false);
@@ -95,6 +109,11 @@ class _JournalScreenState extends State<JournalScreen> {
         triggerResponse: _triggerResponseCtrl.text,
         bestMoment: _bestMomentCtrl.text,
         shivBabaLine: _shivBabaLineCtrl.text,
+        energyLevel: _energy.isEmpty ? '' : _energy.first,
+        practices: _practices.toList(),
+        influences: _influences.toList(),
+        habitsDone: _habits.toList(),
+        challenges: _challenges.toList(),
         sleepReflection: _sleepReflectionCtrl.text,
         createdAt: widget.entry?.createdAt ?? DateTime.now(),
       );
@@ -260,6 +279,94 @@ class _JournalScreenState extends State<JournalScreen> {
                         const SizedBox(height: 24),
 
                         // Journal Fields
+                        // A line to open with. Chosen by day so it stays the
+                        // same all day — a prompt that changes on every rebuild
+                        // reads as decoration, not as something said to you.
+                        Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(bottom: 20),
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: AppTheme.accent.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: AppTheme.accent.withValues(alpha: 0.25)),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.format_quote_rounded, size: 18, color: AppTheme.accentLight),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  JournalPrompts.forToday(),
+                                  style: const TextStyle(
+                                    fontFamily: 'Outfit', fontSize: 13, height: 1.5,
+                                    fontStyle: FontStyle.italic, color: AppTheme.textSecondary,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        if (!_isReadOnly) ...[
+                          ChipGroupField(
+                            label: 'Energy today',
+                            singleChoice: true,
+                            options: JournalOptions.energyLevels,
+                            selected: _energy,
+                            onChanged: (v) => setState(() => _energy = v),
+                          ),
+                          const SizedBox(height: 22),
+                          ChipGroupField(
+                            label: 'Practices',
+                            hint: 'tap any',
+                            options: JournalOptions.practices,
+                            selected: _practices,
+                            onChanged: (v) => setState(() => _practices = v),
+                          ),
+                          const SizedBox(height: 22),
+                          ChipGroupField(
+                            label: 'What shaped today',
+                            hint: 'tap any',
+                            options: JournalOptions.influences,
+                            selected: _influences,
+                            onChanged: (v) => setState(() => _influences = v),
+                          ),
+                          const SizedBox(height: 22),
+                          ChipGroupField(
+                            label: 'Things that went right',
+                            hint: 'tap any',
+                            options: JournalOptions.habits,
+                            selected: _habits,
+                            onChanged: (v) => setState(() => _habits = v),
+                          ),
+                          const SizedBox(height: 22),
+                          ChipGroupField(
+                            label: 'What pulled at you',
+                            hint: 'tap any',
+                            options: JournalOptions.challenges,
+                            selected: _challenges,
+                            onChanged: (v) => setState(() => _challenges = v),
+                          ),
+                          const SizedBox(height: 26),
+                          const Divider(color: AppTheme.border),
+                          const SizedBox(height: 20),
+                          const Text(
+                            'Write more, if you want to',
+                            style: TextStyle(
+                              fontFamily: 'Outfit', fontSize: 14,
+                              fontWeight: FontWeight.w700, color: AppTheme.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'Every box below is optional.',
+                            style: TextStyle(fontFamily: 'Outfit', fontSize: 11.5, color: AppTheme.textMuted),
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+
                         _JournalField(
                           icon: Icons.spa_outlined, title: 'New Habit to Build',
                           hint: _isReadOnly ? '(Empty)' : 'What new habit are you working on?',
@@ -315,8 +422,11 @@ class _JournalScreenState extends State<JournalScreen> {
                           readOnly: _isReadOnly,
                         ),
                         _JournalField(
-                          icon: Icons.brightness_high_outlined, title: 'Shiv Baba\'s Line',
-                          hint: _isReadOnly ? '(Empty)' : 'A line from today\'s Murli or spiritual reading...',
+                          // Was "Shiv Baba's Line", which only makes sense
+                          // inside one tradition. Reworded so a member of any
+                          // faith — or none — can answer it honestly.
+                          icon: Icons.brightness_high_outlined, title: 'A line that stayed with you',
+                          hint: _isReadOnly ? '(Empty)' : 'From scripture, a book, a talk, a song — anything that landed today...',
                           controller: _shivBabaLineCtrl, maxLines: 2,
                           readOnly: _isReadOnly,
                         ),

@@ -116,6 +116,20 @@ class CommunityService {
     }
   }
 
+  /// Removes a reflection and its authorship record.
+  ///
+  /// Rules permit this for an admin or the author. Moderation matters here in a
+  /// way it does not elsewhere: the feed is anonymous, so there is no social
+  /// cost to posting something harmful and nobody else can report it to a name.
+  Future<void> deleteThought(String thoughtId) async {
+    await _db
+        .collection(AppConstants.anonymousThoughtsCollection)
+        .doc(thoughtId)
+        .delete();
+    // Best effort — the public post is already gone, which is what matters.
+    await _db.collection('thought_authors').doc(thoughtId).delete().catchError((_) {});
+  }
+
   Future<void> addReplyToThought(String thoughtId, String reply, String uid) async {
     try {
       final thoughtRef = _db.collection(AppConstants.anonymousThoughtsCollection).doc(thoughtId);

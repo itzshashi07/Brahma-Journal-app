@@ -5,6 +5,7 @@ import '../../services/profile_service.dart';
 import '../../models/user_profile.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/stats_utils.dart';
+import '../../core/constants/streak_tiers.dart';
 import '../../widgets/profile_avatar.dart';
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
@@ -77,6 +78,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
         // Badges come off the best streak ever reached — an earned milestone
         // shouldn't vanish the first day someone misses.
         badges: _generateBadges(
+          p,
           p.longestStreak > p.currentStreak ? p.longestStreak : p.currentStreak,
         ),
         totalMeditationSeconds: p.totalMeditationSeconds,
@@ -131,15 +133,15 @@ class _CommunityScreenState extends State<CommunityScreen> {
     }
   }
 
-  /// Highest milestone first — the card only has room for two, and a Centurion
-  /// showing off "First Step" was not the intent.
-  List<String> _generateBadges(int streak) {
-    final badges = <String>[];
-    if (streak >= 100) badges.add('Centurion');
-    if (streak >= 30) badges.add('30-Day Master');
-    if (streak >= 7) badges.add('7-Day Streak');
-    if (streak >= 1) badges.add('First Step');
-    return badges;
+  /// The member's earned tier, from their best-ever streak so a badge never
+  /// disappears the day someone misses.
+  ///
+  /// Previously this also hardcoded a "Lead Developer" badge onto specific
+  /// email addresses — a private credit sitting on a public leaderboard, which
+  /// is not something a member could ever earn.
+  List<String> _generateBadges(UserProfile p, int streak) {
+    final tier = StreakTiers.forDays(streak);
+    return tier == null ? const [] : ['${tier.emoji} ${tier.label}'];
   }
 
   void _shareLeaderboard() async {
@@ -516,7 +518,7 @@ class _MemberCard extends StatelessWidget {
                   Wrap(
                     spacing: 4,
                     runSpacing: 4,
-                    children: member.badges.take(2).map((b) => Container(
+                    children: member.badges.take(4).map((b) => Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
                         color: AppTheme.primary.withOpacity(0.1),
