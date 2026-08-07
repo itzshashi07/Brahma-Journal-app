@@ -9,6 +9,8 @@ import '../../core/constants/thoughts_365.dart';
 import '../../widgets/sacred.dart';
 import '../../widgets/free_access.dart';
 import '../../widgets/update_dialog.dart';
+import '../checkin/daily_checkin_sheet.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../widgets/profile_avatar.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -82,6 +84,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
     // Check for app update
     _checkForUpdate();
+    _maybeCheckIn();
+  }
+
+  /// Opens the daily check-in once a day.
+  ///
+  /// Only when today's entry has not been written — otherwise it interrupts
+  /// someone who has already journalled, which is exactly the person you least
+  /// want to nag. Also skipped if they dismissed it earlier today: asked once,
+  /// not asked repeatedly.
+  Future<void> _maybeCheckIn() async {
+    final auth = context.read<AuthProvider>();
+    if (auth.user == null) return;
+
+    final journal = context.read<JournalProvider>();
+    if (journal.todaysEntry != null) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'checkin_asked_${DateTime.now().toIso8601String().substring(0, 10)}';
+    if (prefs.getBool(key) == true) return;
+    await prefs.setBool(key, true);
+
+    if (!mounted) return;
+    // A beat after launch so it does not collide with the opening animation.
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+    if (!mounted) return;
+    await DailyCheckInSheet.show(context);
   }
 
   /// Silent on launch unless there is genuinely something to install — an

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/affirmation_service.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/constants/affirmation_backgrounds.dart';
 import '../../core/constants/app_constants.dart';
 import 'dart:math';
 
@@ -63,6 +64,103 @@ class _AffirmationsScreenState extends State<AffirmationsScreen> with SingleTick
     await _service.saveUserAffirmations(auth.user!.uid, newList);
     setState(() { _affirmations = newList; _newAffirmCtrl.clear(); });
     if (mounted) Navigator.pop(context);
+  }
+
+  /// The practice offered with no explanation is easy to dismiss as wishful
+  /// thinking. This gives the mechanisms — and the honest limits.
+  void _showWhy() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.85,
+        maxChildSize: 0.95,
+        builder: (_, controller) => Container(
+          margin: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: AppTheme.bgCard,
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: AppTheme.border),
+          ),
+          child: ListView(
+            controller: controller,
+            children: [
+              const Text('Why affirmations work',
+                  style: TextStyle(fontFamily: 'Outfit', fontSize: 20,
+                      fontWeight: FontWeight.w800, color: AppTheme.textPrimary)),
+              const SizedBox(height: 10),
+              const Text(AffirmationBenefits.intro,
+                  style: TextStyle(fontFamily: 'Outfit', fontSize: 13.5,
+                      height: 1.6, color: AppTheme.textSecondary)),
+              const SizedBox(height: 22),
+              ...AffirmationBenefits.points.map((p) => Padding(
+                    padding: const EdgeInsets.only(bottom: 18),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 34, height: 34,
+                          decoration: BoxDecoration(
+                            color: AppTheme.primary.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(p.$3, size: 17, color: AppTheme.primaryLight),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(p.$1, style: const TextStyle(fontFamily: 'Outfit',
+                                  fontSize: 14, fontWeight: FontWeight.w700,
+                                  color: AppTheme.textPrimary)),
+                              const SizedBox(height: 3),
+                              Text(p.$2, style: const TextStyle(fontFamily: 'Outfit',
+                                  fontSize: 12.5, height: 1.55, color: AppTheme.textSecondary)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  )),
+              const Divider(color: AppTheme.border, height: 28),
+              const Text('How to practise',
+                  style: TextStyle(fontFamily: 'Outfit', fontSize: 15,
+                      fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
+              const SizedBox(height: 12),
+              ...AffirmationBenefits.howTo.map((h) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('·  ', style: TextStyle(color: AppTheme.primaryLight)),
+                        Expanded(child: Text(h, style: const TextStyle(
+                            fontFamily: 'Outfit', fontSize: 12.5, height: 1.5,
+                            color: AppTheme.textSecondary))),
+                      ],
+                    ),
+                  )),
+              const SizedBox(height: 18),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppTheme.accent.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.accent.withValues(alpha: 0.25)),
+                ),
+                child: const Text(AffirmationBenefits.caveat,
+                    style: TextStyle(fontFamily: 'Outfit', fontSize: 11.5,
+                        height: 1.5, color: AppTheme.textMuted)),
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _showAddDialog() {
@@ -161,6 +259,11 @@ class _AffirmationsScreenState extends State<AffirmationsScreen> with SingleTick
                     IconButton(icon: const Icon(Icons.arrow_back_ios, color: AppTheme.textPrimary, size: 20), onPressed: () => context.pop()),
                     const Expanded(
                       child: Text('✨ Affirmations', style: TextStyle(fontFamily: 'Outfit', fontSize: 20, fontWeight: FontWeight.w600, color: AppTheme.textPrimary), textAlign: TextAlign.center),
+                    ),
+                    IconButton(
+                      tooltip: 'Why affirmations work',
+                      icon: const Icon(Icons.help_outline_rounded, color: AppTheme.textMuted),
+                      onPressed: _showWhy,
                     ),
                     IconButton(
                       icon: const Icon(Icons.add_circle_outline, color: AppTheme.primary),

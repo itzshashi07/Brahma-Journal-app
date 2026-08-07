@@ -24,6 +24,10 @@ class JournalEntry {
   final List<String> habitsDone;
   final List<String> challenges;
 
+  /// Daily check-in answers, keyed by question id. Kept as a map so questions
+  /// can be added or rotated without a schema change.
+  final Map<String, String> checkIn;
+
   final DateTime createdAt;
   final DateTime? updatedAt;
 
@@ -47,6 +51,7 @@ class JournalEntry {
     this.influences = const [],
     this.habitsDone = const [],
     this.challenges = const [],
+    this.checkIn = const {},
     required this.createdAt,
     this.updatedAt,
   });
@@ -109,6 +114,7 @@ class JournalEntry {
       influences: List<String>.from(data['influences'] ?? const []),
       habitsDone: List<String>.from(data['habitsDone'] ?? const []),
       challenges: List<String>.from(data['challenges'] ?? const []),
+      checkIn: Map<String, String>.from(data['checkIn'] ?? const {}),
       // clientCreatedAt covers the window where the server stamp is still
       // pending — without it a fresh entry falls back to "now", which is right
       // by luck today and wrong for anything written offline yesterday.
@@ -139,6 +145,7 @@ class JournalEntry {
       'influences': influences,
       'habitsDone': habitsDone,
       'challenges': challenges,
+      'checkIn': checkIn,
     };
   }
 

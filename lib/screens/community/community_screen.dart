@@ -7,6 +7,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/stats_utils.dart';
 import '../../core/constants/streak_tiers.dart';
 import '../../widgets/profile_avatar.dart';
+import '../../widgets/streak_progress.dart';
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/community_service.dart';
@@ -202,6 +203,10 @@ class _CommunityScreenState extends State<CommunityScreen> {
       );
     }
 
+    // Your own progress first: a ranking only motivates whoever is winning,
+    // but a next step 14 days away moves everybody.
+    final me = _members.where((m) => m.profile.uid == _currentUid).firstOrNull;
+
     return RefreshIndicator(
       onRefresh: _loadCommunity,
       color: AppTheme.primary,
@@ -209,8 +214,26 @@ class _CommunityScreenState extends State<CommunityScreen> {
       child: ListView.builder(
         padding: const EdgeInsets.symmetric(horizontal: 16),
         physics: const AlwaysScrollableScrollPhysics(),
-        itemCount: _members.length,
-        itemBuilder: (ctx, i) {
+        itemCount: _members.length + 2,
+        itemBuilder: (ctx, index) {
+          if (index == 0) {
+            return me == null
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: StreakProgressCard(
+                      streak: me.streak,
+                      displayName: me.profile.displayName,
+                    ),
+                  );
+          }
+          if (index == _members.length + 1) {
+            return const Padding(
+              padding: EdgeInsets.only(top: 20, bottom: 30),
+              child: StreakMeaningCard(),
+            );
+          }
+          final i = index - 1;
           final m = _members[i];
           return _MemberCard(
             member: m,
