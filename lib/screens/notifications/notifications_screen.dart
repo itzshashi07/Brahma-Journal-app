@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/notification_service.dart';
+import '../../services/notification_center.dart';
 import '../../models/app_notification.dart';
 import '../../models/announcement.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -30,6 +31,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
   void initState() {
     super.initState();
     _loadDeletedNotificationIds();
+    // Opening this screen is what "seeing" a notification means, so the red
+    // badge on the dashboard clears here rather than on each item tapped.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) context.read<NotificationCenter>().markAllRead();
+    });
   }
 
   @override

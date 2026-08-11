@@ -121,10 +121,10 @@ class AffirmationBenefits {
       Icons.shield_outlined,
     ),
     (
-      'It is how the soul is remembered',
-      '"I am a peaceful soul" is not motivation — it is a reminder of what was '
-          'always true underneath the day. In Brahma Kumaris practice this is '
-          'the whole of it: not becoming something, returning to something.',
+      'It is a return, not a climb',
+      '"I am calm underneath this" is not motivation — it is a reminder of '
+          'something that was already true before the day started. That is the '
+          'whole of it: not becoming something, returning to something.',
       Icons.self_improvement_rounded,
     ),
   ];

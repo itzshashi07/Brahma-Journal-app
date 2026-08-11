@@ -143,7 +143,7 @@ class _TicketCard extends StatelessWidget {
             ),
             const SizedBox(height: AppTheme.space3),
             Text(
-              (name?.isNotEmpty == true) ? name! : 'Seeker',
+              (name?.isNotEmpty == true) ? name! : 'Friend',
               style: const TextStyle(
                 fontFamily: 'Outfit',
                 fontSize: 14.5,
@@ -210,8 +210,8 @@ class _TicketCard extends StatelessWidget {
       scheme: 'mailto',
       path: to,
       queryParameters: {
-        'subject': 'Re: $category — Brahma Journal',
-        'body': '\n\n—\nBrahma Journal Support',
+        'subject': 'Re: $category — InnenFlow',
+        'body': '\n\n—\nInnenFlow Support',
       },
     );
     try {

@@ -86,8 +86,15 @@ class JournalService {
 
   /// Streak computed from already-loaded entries — avoids a second round trip
   /// when the caller has the list in hand.
-  int streakForEntries(List<JournalEntry> entries) =>
-      streakFromDates(entries.map((e) => e.createdAt));
+  ///
+  /// [recoveredDays] are days forgiven by a streak recovery. They are passed in
+  /// rather than fetched so this stays a pure calculation, and so the dashboard
+  /// and the leaderboard cannot disagree about what a streak is.
+  int streakForEntries(
+    List<JournalEntry> entries, {
+    Iterable<DateTime> recoveredDays = const [],
+  }) =>
+      streakFromDates([...entries.map((e) => e.createdAt), ...recoveredDays]);
 
   // Get all entries (admin use)
   Future<List<JournalEntry>> getAllEntries() async {

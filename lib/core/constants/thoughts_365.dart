@@ -4,6 +4,27 @@ class Thoughts365 {
     return _thoughts[index];
   }
 
+  static int dayOfYear(DateTime date) =>
+      date.difference(DateTime(date.year, 1, 1)).inDays + 1;
+
+  /// The whole library, for the admin picker.
+  ///
+  /// Exposed read-only rather than making `_thoughts` public: the list is the
+  /// app's own content and nothing should be adding to it at runtime.
+  static List<String> get all => List.unmodifiable(_thoughts);
+
+  static int get count => _thoughts.length;
+
+  /// Case-insensitive substring search, used by the admin picker's filter.
+  /// Returns `(dayNumber, text)` so a result can be labelled by the day it
+  /// would normally appear on.
+  static List<(int, String)> search(String query) {
+    final q = query.trim().toLowerCase();
+    final indexed = _thoughts.indexed.map((e) => (e.$1 + 1, e.$2));
+    if (q.isEmpty) return indexed.toList();
+    return indexed.where((e) => e.$2.toLowerCase().contains(q)).toList();
+  }
+
   static const List<String> _thoughts = [
     // Month 1
     "Peace is not the absence of conflict, but the ability to cope with it through inner strength.",
@@ -64,7 +85,7 @@ class Thoughts365 {
     "Live in the sunshine, swim the sea, drink the wild air.",
     "The mind is everything. What you think you become.",
     "Be happy for this moment. This moment is your life.",
-    "Spiritual progress is measured by the degree of inner peace.",
+    "Progress is measured by the degree of inner peace.",
     "Happiness is when what you think, what you say, and what you do are in harmony.",
     "Turn your wounds into wisdom.",
     "Be a lamp, a lifeboat, or a ladder. Help someone's soul heal.",
@@ -92,7 +113,7 @@ class Thoughts365 {
     "He who is contented is rich.",
     "Peace is a daily, a weekly, a monthly process, gradually changing opinions, slowly eroding old barriers.",
     "Inner peace begins the moment you choose not to allow another person or event to control your emotions.",
-    "Spiritual life is not a life before, after, or beyond our everyday existence. It is the life itself.",
+    "The inner life is not something before, after, or beyond everyday existence. It is the life itself.",
     "Within you, there is a stillness and a sanctuary to which you can retreat at any time.",
     "The soul that sees beauty may sometimes walk alone.",
     "The greatest effort is not to be successful, but to be true to oneself.",
@@ -244,7 +265,7 @@ class Thoughts365 {
     "Choose to focus on the present.",
     "You are surrounded by peace.",
     "Trust your inner guidance.",
-    "Every day is a step on your spiritual journey.",
+    "Every day is a step on the road inward.",
     "Let go of anger and choose peace.",
     "Your soul is connected to the divine.",
     "Breathe in calm, breathe out stress.",
@@ -393,6 +414,54 @@ class Thoughts365 {
     "Choose to be a beacon of peace.",
     "Your mind is a peaceful sanctuary of love.",
     "May you live in peace, now and forever.",
-    "Om Shanti... Peace is your eternal home."
+    "Quiet is not somewhere you go. It is somewhere you already live."
   ];
+}
+
+/// What a thought of the day is actually for, in plain language.
+///
+/// A quote on a purple card is decoration until someone tells you what to do
+/// with it. Most people read the line, feel briefly pleasant, and forget it by
+/// the time the kettle boils — which is not a failure of the line, it is a
+/// failure to explain the practice. This is that explanation, kept short enough
+/// to be read once.
+class ThoughtGuidance {
+  static const title = 'What to do with this';
+
+  static const intro =
+      'A thought for the day is not a quote to admire. It is one idea you carry '
+      'around for a single day and test against whatever actually happens — the '
+      'traffic, the argument, the email you did not want. Twenty-four hours '
+      'later you swap it for another. That is the whole practice.';
+
+  static const steps = <(String, String)>[
+    (
+      'Read it slowly, twice',
+      'Once for the words, once for the meaning. Ten seconds. Reading it fast '
+          'is the same as not reading it.',
+    ),
+    (
+      'Put it in your own words',
+      'If you cannot say it plainly to yourself, it has not landed yet. "Peace '
+          'is not the absence of conflict" becomes "I can stay steady even when '
+          'today goes badly." Your version is the one that works.',
+    ),
+    (
+      'Pick one moment to use it',
+      'Choose the part of the day you already know will be hard — the commute, '
+          'the meeting, the evening. Decide now that this is where the thought '
+          'gets applied. An idea with no appointment never shows up.',
+    ),
+    (
+      'Check back tonight',
+      'One line in your journal: did it hold? Did you forget it by noon? Both '
+          'are useful answers. This is what turns a nice sentence into '
+          'something you have actually learned.',
+    ),
+  ];
+
+  static const note =
+      'A new thought appears each day, drawn from 365 of them. If one is worth '
+      'more than a day, keep it — nothing here is on a schedule you owe '
+      'anything to.';
 }

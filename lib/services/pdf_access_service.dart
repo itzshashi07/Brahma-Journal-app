@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+import '../core/constants/app_constants.dart';
+
 /// Fetches a book for in-app reading.
 ///
 /// Books are catalogued as links, and in practice those links are Google Drive
@@ -23,16 +25,33 @@ class PdfAccessService {
       MethodChannel('com.brahma.brahmaApp/secure_window');
 
   /// Blocks screenshots, screen recording and the recents thumbnail.
+  ///
+  /// Belt and braces: the whole app is protected from launch — FLAG_SECURE in
+  /// MainActivity.onCreate on Android, the secure-layer trick in AppDelegate on
+  /// iOS — so this call only re-asserts what is already true. It stays because
+  /// the reader should not silently depend on a setting made somewhere else in
+  /// the app.
+  ///
+  /// Skipped entirely while [AppConstants.allowScreenCapture] is set, so a
+  /// promo recording does not go black the moment a book is opened. The native
+  /// side refuses the request as well; this check just avoids the round trip.
   static Future<void> enableScreenProtection() async {
+    if (AppConstants.allowScreenCapture) return;
     try {
       await _secureWindow.invokeMethod('enable');
     } on PlatformException {
-      // iOS has no equivalent flag; reading still works, just unprotected.
+      // Protection is applied natively at launch regardless; reading proceeds.
     } on MissingPluginException {
       // Older build without the channel — not worth failing the read over.
     }
   }
 
+  /// Intentionally does not unprotect anything any more.
+  ///
+  /// Protection is app-wide, so honouring a "disable" from the reader would
+  /// unprotect the journal, the check-ins and the support threads sitting
+  /// behind it. The native side treats this as a no-op; the method is kept so
+  /// existing callers still compile and read honestly.
   static Future<void> disableScreenProtection() async {
     try {
       await _secureWindow.invokeMethod('disable');

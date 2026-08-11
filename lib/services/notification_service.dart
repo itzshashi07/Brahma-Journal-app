@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../models/app_notification.dart';
 import '../models/announcement.dart';
@@ -107,7 +108,7 @@ class NotificationService {
   Future<void> _showLocalNotification(AppNotification notification) async {
     const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
       'brahma_alerts_channel',
-      'Brahma Journal Alerts',
+      'InnenFlow Alerts',
       channelDescription: 'Notifications for blogs, community questions, and library books.',
       importance: Importance.max,
       priority: Priority.high,
@@ -135,6 +136,51 @@ class NotificationService {
       platformDetails,
       payload: notification.route,
     );
+  }
+
+  /// Puts a notification in the system tray right now, from data this device
+  /// already has.
+  ///
+  /// The private path above only fires for the app-wide `/notifications` feed.
+  /// NotificationCenter watches two more — operator alerts and counselling
+  /// replies — and needs to raise a tray notification for those without first
+  /// writing a broadcast document that every other user would then receive.
+  Future<void> showNow({
+    required int id,
+    required String title,
+    required String body,
+    String? payload,
+  }) async {
+    if (!_isInitialized) {
+      try {
+        await init();
+      } catch (e) {
+        debugPrint('⚠️ Notifications unavailable: $e');
+        return;
+      }
+    }
+
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'brahma_alerts_channel',
+        'InnenFlow Alerts',
+        channelDescription:
+            'Notifications for blogs, community questions, and library books.',
+        importance: Importance.max,
+        priority: Priority.high,
+      ),
+      iOS: DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      ),
+    );
+
+    try {
+      await _localNotifications.show(id, title, body, details, payload: payload);
+    } catch (e) {
+      debugPrint('⚠️ Could not show notification: $e');
+    }
   }
 
   // Write a new notification event to Firestore

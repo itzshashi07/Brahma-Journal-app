@@ -1,15 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
-import 'package:just_audio/just_audio.dart';
 import 'dart:async';
 import 'dart:math';
 import '../../providers/auth_provider.dart';
+import '../../services/chime_service.dart';
 import '../../services/meditation_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/utils/date_utils.dart';
 
+/// A silent timer.
+///
+/// The background-sound picker is gone. It streamed five stock pop tracks from
+/// a demo server under names like "Tibetan Bowls" — so the app needed the
+/// internet in order to be quiet, and what it played was not what it said. If
+/// you want sound, your own player does it better; this screen keeps the clock.
 class MeditationScreen extends StatefulWidget {
   /// Preselected session length, passed through when a guided theme is chosen.
   final int? initialMinutes;
@@ -28,7 +34,6 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
   Timer? _timer;
   late AnimationController _pulseCtrl;
   late Animation<double> _pulseAnim;
-  late AudioPlayer _audioPlayer;
 
   /// Elapsed time is measured against the wall clock, not by counting timer
   /// ticks. Timer.periodic is throttled or suspended whenever the app is
@@ -40,39 +45,6 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
   int _lastMantraSecond = -1;
   String? _uid;
 
-  final List<Map<String, String>> _sounds = [
-    {
-      'id': 'nature',
-      'name': 'Forest Sounds',
-      'url': 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3'
-    },
-    {
-      'id': 'tibetan',
-      'name': 'Tibetan Bowls',
-      'url': 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3'
-    },
-    {
-      'id': 'ocean',
-      'name': 'Ocean Waves',
-      'url': 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3'
-    },
-    {
-      'id': 'flute',
-      'name': 'Peaceful Flute',
-      'url': 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3'
-    },
-    {
-      'id': 'chimes',
-      'name': 'Wind Chimes',
-      'url': 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3'
-    },
-    {
-      'id': 'silence',
-      'name': 'Silence',
-      'url': ''
-    },
-  ];
-  String _selectedSound = 'nature';
 
   @override
   void initState() {
@@ -81,8 +53,9 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
     _pulseAnim = Tween<double>(begin: 0.95, end: 1.05).animate(
       CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
     );
-    _audioPlayer = AudioPlayer();
-    _audioPlayer.setLoopMode(LoopMode.one).catchError((_) {});
+    // Rendered and written to disk up front, so the opening bell lands on the
+    // same tap as the timer rather than a beat later.
+    ChimeService.instance.prepare();
   }
 
   @override
@@ -107,30 +80,6 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
     return left < 0 ? 0 : left;
   }
 
-  Future<void> _changeSound(String soundId) async {
-    setState(() => _selectedSound = soundId);
-    if (_isActive) {
-      await _playSelectedSound();
-    }
-  }
-
-  Future<void> _playSelectedSound() async {
-    final soundObj = _sounds.firstWhere((s) => s['id'] == _selectedSound);
-    final url = soundObj['url'] ?? '';
-    if (url.isNotEmpty) {
-      try {
-        await _audioPlayer.setUrl(url);
-        if (_isActive) {
-          _audioPlayer.play();
-        }
-      } catch (e) {
-        print('❌ Audio player error: $e');
-      }
-    } else {
-      await _audioPlayer.stop();
-    }
-  }
-
   /// Play/pause button. A finished session starts a fresh one.
   void _onPrimaryTap() {
     if (_isActive) {
@@ -143,13 +92,15 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
 
   void _startTimer() {
     if (_isActive) return;
+    // The opening bell. Someone about to close their eyes needs to hear that
+    // the clock is running; watching the screen to check defeats the exercise.
+    ChimeService.instance.start();
     setState(() {
       _isActive = true;
       _isCompleted = false;
       _segmentStartedAt = DateTime.now();
     });
     _pulseCtrl.repeat(reverse: true);
-    _playSelectedSound();
 
     // Ticks only drive the display; the numbers come from the wall clock, so a
     // dropped tick costs nothing.
@@ -176,7 +127,9 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
   void _completeSession() {
     _timer?.cancel();
     _pulseCtrl.stop();
-    _audioPlayer.stop();
+    // The closing bell — three descending notes, so it cannot be mistaken for
+    // the single note that opened the session.
+    ChimeService.instance.end();
     _accumulatedSeconds = _totalSeconds;
     _segmentStartedAt = null;
     setState(() {
@@ -190,7 +143,9 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
   void _pauseTimer() {
     _timer?.cancel();
     _pulseCtrl.stop();
-    _audioPlayer.pause();
+    // A quieter, lower note: stopping deliberately should be acknowledged, not
+    // celebrated like a finished session.
+    ChimeService.instance.pause();
     setState(() {
       _accumulatedSeconds = _elapsedSeconds;
       _segmentStartedAt = null;
@@ -203,7 +158,6 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
     _timer?.cancel();
     _pulseCtrl.stop();
     _pulseCtrl.reset();
-    _audioPlayer.stop();
     _saveSession(); // bank whatever was meditated before clearing it
     setState(() {
       _isActive = false;
@@ -217,7 +171,7 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
   void _rotateMantra() {
     if (!mounted) return;
     setState(() {
-      _currentMantra = Random().nextInt(AppConstants.mantras.length);
+      _currentMantra = Random().nextInt(AppConstants.groundingLines.length);
     });
   }
 
@@ -241,7 +195,6 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
     _segmentStartedAt = null;
     _saveSession();
     _pulseCtrl.dispose();
-    _audioPlayer.dispose();
     super.dispose();
   }
 
@@ -357,7 +310,7 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
                               border: Border.all(color: AppTheme.primary.withOpacity(0.2)),
                             ),
                             child: Text(
-                              AppConstants.mantras[_currentMantra],
+                              AppConstants.groundingLines[_currentMantra],
                               textAlign: TextAlign.center,
                               style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.primaryLight, fontSize: 16, fontStyle: FontStyle.italic),
                             ),
@@ -411,37 +364,6 @@ class _MeditationScreenState extends State<MeditationScreen> with TickerProvider
                         ),
                         const SizedBox(height: 20),
 
-                        // Sound Selection
-                        const Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text('Background Sound', style: TextStyle(fontFamily: 'Outfit', fontSize: 14, fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8, runSpacing: 8,
-                          children: _sounds.map((s) {
-                            final isSelected = _selectedSound == s['id'];
-                            return GestureDetector(
-                              onTap: () => _changeSound(s['id']!),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: isSelected ? AppTheme.primary.withOpacity(0.2) : AppTheme.bgCard,
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(color: isSelected ? AppTheme.primary : const Color(0xFF2D2D4E)),
-                                ),
-                                child: Text(
-                                  s['name']!,
-                                  style: TextStyle(
-                                    fontFamily: 'Outfit', fontSize: 13,
-                                    color: isSelected ? AppTheme.primary : AppTheme.textSecondary,
-                                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                                  ),
-                                ),
-                              ),
-                            );
-                          }).toList(),
-                        ),
                       ],
 
                       const SizedBox(height: 28),

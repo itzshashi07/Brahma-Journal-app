@@ -10,9 +10,11 @@ import '../../widgets/sacred.dart';
 /// Reads a book inside the app, page by page.
 ///
 /// Deliberately offers no share, save or print control, keeps the file in
-/// private cache only for as long as the screen is open, and turns on
+/// private cache only for as long as the screen is open, and asks for
 /// FLAG_SECURE so the pages are excluded from screenshots and screen
-/// recording. See PdfAccessService for what that does and does not achieve.
+/// recording. See PdfAccessService for what that does and does not achieve —
+/// and note that the request is a no-op while `AppConstants.allowScreenCapture`
+/// is set, which it currently is so the app can be filmed for promotion.
 class PdfReaderScreen extends StatefulWidget {
   final String title;
   final String link;
@@ -41,10 +43,10 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   @override
   void dispose() {
-    // Both matter: drop the protection flag so the rest of the app can be
-    // screenshotted normally, and delete the cached copy so a book does not
-    // linger on disk after it has been closed.
-    PdfAccessService.disableScreenProtection();
+    // The protection flag is no longer dropped here — it is app-wide now, and
+    // clearing it on the way out of the reader would unprotect every screen
+    // behind it. Only the cached copy is discarded, so a book does not linger
+    // on disk after it has been closed.
     PdfAccessService.discard(_file);
     super.dispose();
   }

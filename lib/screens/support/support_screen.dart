@@ -26,7 +26,7 @@ class _SupportScreenState extends State<SupportScreen> with SingleTickerProvider
   /// in-app send does not cost them the text they just wrote.
   Future<void> _launchWhatsAppWithMessage(String message) async {
     final text = Uri.encodeComponent(
-      message.isEmpty ? 'Hello, I need help with Brahma Journal.' : message,
+      message.isEmpty ? 'Hello, I need help with InnenFlow.' : message,
     );
     final url = Uri.parse('https://wa.me/918078633912?text=$text');
     try {
@@ -66,7 +66,7 @@ class _SupportScreenState extends State<SupportScreen> with SingleTickerProvider
     },
     {
       'q': 'Can I edit historical journal entries?',
-      'a': 'Brahma Journal follows a focus-forward daily policy. You can look back at past reflections at any time to analyze your path, but you can only create/edit reflections for the current day.'
+      'a': 'InnenFlow follows a focus-forward daily policy. You can look back at past reflections at any time to analyze your path, but you can only create/edit reflections for the current day.'
     },
     {
       'q': 'Where do the meditation background sounds come from?',
@@ -319,7 +319,7 @@ class _SupportScreenState extends State<SupportScreen> with SingleTickerProvider
                               ),
                               items: const [
                                 DropdownMenuItem(value: 'General Query', child: Text('General Query')),
-                                DropdownMenuItem(value: 'Spiritual Feedback', child: Text('Spiritual Feedback')),
+                                DropdownMenuItem(value: 'General Feedback', child: Text('General Feedback')),
                                 DropdownMenuItem(value: 'Technical Bug', child: Text('Technical Bug')),
                                 DropdownMenuItem(value: 'Payment Issue', child: Text('Payment Issue')),
                               ],

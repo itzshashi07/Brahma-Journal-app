@@ -5,7 +5,7 @@ import '../../core/constants/gita_verses.dart';
 import '../../core/theme/app_theme.dart';
 import '../../widgets/sacred.dart';
 
-/// Gita in Real Life.
+/// Wisdom for real life, drawn from the Gita.
 ///
 /// Organised by the situation you are actually in rather than by chapter, so
 /// someone at 2am after a breakup can find something useful without knowing
@@ -52,7 +52,7 @@ class _GitaScreenState extends State<GitaScreen> {
           child: Column(
             children: [
               SacredAppBar(
-                title: _hindi ? 'गीता जीवन में' : 'Gita in Real Life',
+                title: _hindi ? 'जीवन के लिए ज्ञान' : 'Wisdom for Real Life',
                 subtitle: _hindi
                     ? '${verses.length} श्लोक'
                     : '${verses.length} verses',

@@ -1,61 +1,28 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import '../core/constants/app_constants.dart';
 import '../core/theme/app_theme.dart';
 import 'sacred.dart';
 
-/// Live countdown to the end of the free-access window.
+/// Says that everything is free. It does not say for how long.
 ///
-/// Ticks once a minute rather than once a second: below a day the seconds would
-/// be noise, and a per-second rebuild of the dashboard costs battery for no
-/// benefit. Inside the last 24 hours it switches to hours so the urgency is
-/// real rather than a static number.
-class FreeAccessBanner extends StatefulWidget {
+/// This was a live countdown against a fixed end date, ticking once a minute,
+/// with a progress bar filling towards the moment access expired. All of that
+/// is gone on purpose. A countdown is a promise that something is about to be
+/// taken away, and it kept that promise on a schedule nobody revisited — a
+/// member who opened the app in week eleven was told to hurry up by a deadline
+/// set in a constant months earlier.
+///
+/// Now it is a plain statement of the current state, and the state only changes
+/// when [AppConstants.paymentsEnabled] is flipped by hand.
+class FreeAccessBanner extends StatelessWidget {
   final bool compact;
   const FreeAccessBanner({super.key, this.compact = false});
-
-  @override
-  State<FreeAccessBanner> createState() => _FreeAccessBannerState();
-}
-
-class _FreeAccessBannerState extends State<FreeAccessBanner> {
-  Timer? _ticker;
-
-  @override
-  void initState() {
-    super.initState();
-    _ticker = Timer.periodic(const Duration(minutes: 1), (_) {
-      if (mounted) setState(() {});
-    });
-  }
-
-  @override
-  void dispose() {
-    _ticker?.cancel();
-    super.dispose();
-  }
-
-  static String remainingLabel() {
-    final left = AppConstants.freeAccessUntil.difference(DateTime.now().toUtc());
-    if (left.isNegative) return 'Free access has ended';
-    if (left.inDays >= 1) {
-      final d = left.inDays;
-      return '$d ${d == 1 ? 'day' : 'days'} left';
-    }
-    final h = left.inHours;
-    if (h >= 1) return '$h ${h == 1 ? 'hour' : 'hours'} left';
-    return 'Ends within the hour';
-  }
 
   @override
   Widget build(BuildContext context) {
     if (!AppConstants.isFreeAccessActive) return const SizedBox.shrink();
 
-    final left = AppConstants.freeAccessUntil.difference(DateTime.now().toUtc());
-    final total = const Duration(days: 92).inSeconds;
-    final progress = (1 - (left.inSeconds / total)).clamp(0.0, 1.0);
-
-    if (widget.compact) {
+    if (compact) {
       return Container(
         padding: const EdgeInsets.symmetric(
             horizontal: AppTheme.space3, vertical: AppTheme.space1 + 2),
@@ -68,9 +35,9 @@ class _FreeAccessBannerState extends State<FreeAccessBanner> {
           children: [
             const Icon(Icons.card_giftcard_rounded, size: 13, color: Colors.white),
             const SizedBox(width: 5),
-            Text(
-              'Free · ${remainingLabel()}',
-              style: const TextStyle(
+            const Text(
+              'Everything free',
+              style: TextStyle(
                 fontFamily: 'Outfit',
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
@@ -103,47 +70,24 @@ class _FreeAccessBannerState extends State<FreeAccessBanner> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    const Text(
-                      'Everything is free',
-                      style: TextStyle(
-                        fontFamily: 'Outfit',
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: AppTheme.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(width: AppTheme.space2),
-                    Text(
-                      remainingLabel(),
-                      style: const TextStyle(
-                        fontFamily: 'Outfit',
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.accentLight,
-                      ),
-                    ),
-                  ],
+                const Text(
+                  'Everything is free',
+                  style: TextStyle(
+                    fontFamily: 'Outfit',
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.textPrimary,
+                  ),
                 ),
                 const SizedBox(height: 3),
                 const Text(
-                  'Every feature, no card, no catch. Build the habit while it lasts.',
+                  'Every feature, no card, no catch. Take as long as you need — '
+                  'nothing here is counting down.',
                   style: TextStyle(
                     fontFamily: 'Outfit',
                     fontSize: 12,
                     height: 1.35,
                     color: AppTheme.textSecondary,
-                  ),
-                ),
-                const SizedBox(height: AppTheme.space3),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(AppTheme.radiusPill),
-                  child: LinearProgressIndicator(
-                    value: progress,
-                    minHeight: 4,
-                    backgroundColor: Colors.white.withValues(alpha: 0.08),
-                    valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.accent),
                   ),
                 ),
               ],
@@ -187,9 +131,9 @@ class FreeAccessNotice extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 2),
-                Text(
-                  'No payment, no card details. ${_FreeAccessBannerState.remainingLabel()}.',
-                  style: const TextStyle(
+                const Text(
+                  'No payment, no card details, no trial clock.',
+                  style: TextStyle(
                     fontFamily: 'Outfit',
                     fontSize: 12,
                     height: 1.35,

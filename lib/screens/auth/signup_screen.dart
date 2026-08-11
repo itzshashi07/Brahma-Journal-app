@@ -86,7 +86,7 @@ class _SignupScreenState extends State<SignupScreen> {
     if (success) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Welcome to Brahma Journal 🙏',
+          content: const Text('Welcome to InnenFlow 🙏',
               style: TextStyle(fontFamily: 'Outfit')),
           backgroundColor: AppTheme.success,
           behavior: SnackBarBehavior.floating,
@@ -134,7 +134,7 @@ class _SignupScreenState extends State<SignupScreen> {
       _razorpay.open({
         'key': subscription.keyId,
         'subscription_id': subscription.subscriptionId,
-        'name': 'Brahma Journal',
+        'name': 'InnenFlow',
         'description': planDescription,
         'prefill': {
           'contact': _phoneCtrl.text.trim(),
@@ -246,7 +246,7 @@ class _SignupScreenState extends State<SignupScreen> {
                     const Icon(Icons.circle_outlined, size: 64, color: AppTheme.primary),
                     const SizedBox(height: 16),
                     const Text(
-                      'Brahma Journal',
+                      'InnenFlow',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontFamily: 'Outfit', fontSize: 28, fontWeight: FontWeight.bold, color: AppTheme.textPrimary,
@@ -254,7 +254,7 @@ class _SignupScreenState extends State<SignupScreen> {
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'Spiritual Growth & Mindfulness',
+                      'Clarity, Focus & Calm',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontFamily: 'Outfit', fontSize: 14, color: AppTheme.textSecondary,

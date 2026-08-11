@@ -1,30 +1,73 @@
 package com.brahma.brahmaApp
 
-import android.content.Intent
-import android.net.Uri
-import android.os.Build
-import android.provider.Settings
+import android.os.Bundle
 import android.view.WindowManager
-import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import java.io.File
 
 /**
  * Native bridges the Flutter side cannot do itself.
  *
- *  * `secure_window` — FLAG_SECURE around the in-app PDF reader.
- *  * `installer`     — hands a downloaded APK to Android's package installer.
+ *  * `secure_window` — FLAG_SECURE, applied to the whole app in onCreate.
  *
- * Nothing here installs anything silently. Android does not allow that outside
- * of a system app: the user always sees the installer and confirms. All this
- * does is skip the browser round trip, so the update is one tap instead of
- * download → find file → open → confirm.
+ * There used to be a second channel here, `installer`, which handed a
+ * downloaded APK to Android's package installer. It is gone: Google Play does
+ * not permit an app to update itself by any route other than Play's own, and
+ * the REQUEST_INSTALL_PACKAGES permission it needed is an automatic rejection.
+ * Updates now open the store listing. See AppUpdateService on the Dart side.
  */
 class MainActivity : FlutterActivity() {
     private val secureChannel = "com.brahma.brahmaApp/secure_window"
-    private val installerChannel = "com.brahma.brahmaApp/installer"
+
+    companion object {
+        /**
+         * Whether the app may be screenshotted and screen-recorded.
+         *
+         * Tied to the build type rather than to a hand-flipped constant, and
+         * that is the point: **a release build is always protected**, so there
+         * is no longer a way to ship an unprotected one by forgetting to change
+         * something back.
+         *
+         * Debug builds are capturable, which is what makes store screenshots
+         * and a walkthrough recording possible — with FLAG_SECURE on, the
+         * system refuses the screenshot outright and a screen recording comes
+         * out black. Debug builds are never distributed; App Distribution and
+         * the Play Store both get release builds.
+         *
+         * The same rule is expressed in two other places, because each runs
+         * before the others exist:
+         *   * `ScreenSecurity.allowScreenCapture` in ios/Runner/AppDelegate.swift
+         *   * `AppConstants.allowScreenCapture` in lib/core/constants/app_constants.dart
+         */
+        val ALLOW_SCREEN_CAPTURE = BuildConfig.DEBUG
+    }
+
+    /**
+     * Applies FLAG_SECURE to the whole app unless capture is allowed.
+     *
+     * Journal entries, check-ins, anonymous thoughts and counselling threads
+     * are the most private things in here, so protection is app-wide rather
+     * than bolted onto the book reader — which was the least personal screen in
+     * the app and, before this, the only protected one.
+     *
+     * Set before super.onCreate so the flag is in place before the first frame
+     * is ever composited; a window can otherwise be captured in the gap.
+     *
+     * What it does when on: the system refuses the screenshot ("Can't take
+     * screenshot due to security policy"), recordings and casts show black, and
+     * the app switcher shows a blank card. What it cannot do: stop a second
+     * phone pointed at the screen. Nothing on any platform can.
+     */
+    override fun onCreate(savedInstanceState: Bundle?) {
+        if (!ALLOW_SCREEN_CAPTURE) {
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_SECURE,
+                WindowManager.LayoutParams.FLAG_SECURE,
+            )
+        }
+        super.onCreate(savedInstanceState)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -32,85 +75,27 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, secureChannel)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    // The PDF reader asks for this on the way in. While capture
+                    // is allowed it is answered rather than obeyed: honouring it
+                    // would black out the one screen a promo video most wants to
+                    // show, from a call the Dart side makes for a different
+                    // reason entirely.
                     "enable" -> {
-                        window.setFlags(
-                            WindowManager.LayoutParams.FLAG_SECURE,
-                            WindowManager.LayoutParams.FLAG_SECURE,
-                        )
-                        result.success(true)
+                        if (!ALLOW_SCREEN_CAPTURE) {
+                            window.setFlags(
+                                WindowManager.LayoutParams.FLAG_SECURE,
+                                WindowManager.LayoutParams.FLAG_SECURE,
+                            )
+                        }
+                        result.success(!ALLOW_SCREEN_CAPTURE)
                     }
-                    "disable" -> {
-                        window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-                        result.success(true)
-                    }
+                    // Deliberately does NOT clear the flag when protection is
+                    // on. It is app-wide, so honouring a "disable" from one
+                    // screen would quietly unprotect every screen behind it.
+                    "disable" -> result.success(true)
                     else -> result.notImplemented()
                 }
             }
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, installerChannel)
-            .setMethodCallHandler { call, result ->
-                when (call.method) {
-                    // Android 8+ requires the user to have allowed this app to
-                    // install packages. Asking first means we can send them to
-                    // the right settings screen instead of failing at the end
-                    // of a 70 MB download.
-                    "canInstall" -> result.success(canRequestInstalls())
-
-                    "openInstallSettings" -> {
-                        openInstallPermissionSettings()
-                        result.success(true)
-                    }
-
-                    "installApk" -> {
-                        val path = call.argument<String>("path")
-                        if (path.isNullOrEmpty()) {
-                            result.error("no_path", "APK path missing", null)
-                            return@setMethodCallHandler
-                        }
-                        try {
-                            installApk(File(path))
-                            result.success(true)
-                        } catch (e: Exception) {
-                            result.error("install_failed", e.message, null)
-                        }
-                    }
-
-                    else -> result.notImplemented()
-                }
-            }
-    }
-
-    private fun canRequestInstalls(): Boolean =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            packageManager.canRequestPackageInstalls()
-        } else {
-            true
-        }
-
-    private fun openInstallPermissionSettings() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startActivity(
-                Intent(
-                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    Uri.parse("package:$packageName"),
-                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-        }
-    }
-
-    private fun installApk(apk: File) {
-        // A file:// URI is rejected from Android 7 onward; the installer needs a
-        // content:// URI it has been granted read permission on.
-        val uri = FileProvider.getUriForFile(
-            this,
-            "$packageName.fileprovider",
-            apk,
-        )
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        startActivity(intent)
     }
 }

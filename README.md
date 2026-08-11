@@ -1,97 +1,98 @@
-# 🕉️ Brahma Journal — Spiritual Wellness & Mindfulness Companion
+# InnenFlow — a quieter place to think
 
-Brahma Journal is a premium, youth-attractive, and peaceful mindfulness application built using **Flutter**. Designed to help users track their spiritual progress, build daily meditation habits, share reflections, and analyze their emotional patterns in a safe, peaceful environment.
+InnenFlow is a Flutter app for people trying to build a steadier inner life: a daily journal, guided meditation, an anonymous board, and analytics that answer the one question a mood tracker cannot — *am I actually doing the work I said mattered to me?*
 
----
-
-## 🌟 Key Features
-
-### 📔 1. Calming Onboarding & Welcome Sanctuary
-- **6-Slide Feature Showcase**: Engaging visuals explaining journal entries, audio meditations, affirmations, anonymous boards, community streaks, and mood analytics.
-- **Rotating Quote Ticker**: Dynamic quote display carousel featuring peaceful mindfulness quotes on a beautiful dark-mode gradient layout.
-
-### ✍️ 2. Mindful Journaling (Focus Forward)
-- **12 Comprehensive Entry Fields**: Log daily reflections, actions, values, and sleep parameters.
-- **Minimalist Mood Wrap Buttons**: Clean outline mood selection tags ("Restless", "Heavy", "Neutral", "Calm", "Joyful").
-- **Past Entry Protection**: View historical data as read-only to analyze past paths while ensuring changes can only be made for the current day.
-
-### 🧘 3. Audio Meditation Sanctuary
-- Timer-guided meditation sessions.
-- High-quality, serene background sound profiles (Forest, Bowls, Waves) loaded dynamically from Cloud Storage.
-
-### 💖 4. Serene Affirmations & Mantras
-- Daily affirmation progress tracking.
-- peaceful mantras designed for grounding the mind.
-
-### 🗣️ 5. Anonymous Thoughts Board
-- Safely share and read anonymous spiritual thoughts.
-- Connect and exchange support messages with zero judgment.
-
-### 🏆 6. Streak Leaderboards (Community)
-- Build daily journaling streaks.
-- Non-disruptive ranking views utilizing premium metallic circular badges instead of emojis.
-
-### 📊 7. Deep Mood Analytics
-- Interactive mood and habit charts using `fl_chart`.
-- Visualize historical mental patterns and identify peace triggers.
+It is deliberately **religion-neutral**. The practices here come from traditions all over the world, but nothing in the app asks you to belong to any of them. Anyone can use it and recognise themselves in it.
 
 ---
 
-## 💳 Payment & Subscriptions Integration
-Brahma Journal integrates **Razorpay Subscriptions (Auto-Debit)** for registration:
-- **Monthly Plan**: ₹49/month
-- **Annual Plan**: ₹399/year (Save 32%)
-- **Dynamic Mandate**: Uses Razorpay subscription REST API dynamically to fetch mandate IDs and open the secure UPI Autopay / Card mandate checkout.
-- **Fallback Mode**: Automatically transitions to a standard test amount payment if subscription Plan IDs are unconfigured locally.
+## 🌟 What is in it
+
+### ✍️ Write
+- **Journal** — a structured daily entry: mood, energy, what helped, what got in the way, and a free-text reflection. Past days are read-only; you can look back, but you can only write today.
+- **Affirmations** — short phrases with a stated reason for each, so it reads as practice rather than as slogans.
+- **Open Board** — post a reflection anonymously and reply to other people's. Posts fade after a month. Nothing on the board carries your account id, including replies.
+
+### 📖 Read
+- **Wisdom for Real Life** — organised by the situation you are actually in rather than by chapter, so it is findable at 2am. Sanskrit is present for those who want it and collapsed for those who do not.
+- **Articles** — written by members, with comments.
+- **Library** — books and long reads, page-by-page in-app.
+
+### 🌿 Unwind
+- **Meditation** — timed sittings, a technique library, and a short quiz that recommends one based on how you actually feel right now.
+- **Game Zone** — memory, reflex, attention and puzzle games. Focus minutes are tracked separately from meditation minutes so neither number lies.
+
+### 📊 Track
+- **Your Patterns** — mood over time, meditation minutes, and a consistency chart for your own daily checklist.
+- **Streak Board** and **Game Ranks** — leaderboards, recomputed server-side so they cannot be inflated from a patched client.
+
+### 🎯 Your daily checklist
+Pick what you are working on (student, engineer, musician, athlete, or none of the above) and the journal offers a short list of concrete things to tick. **Add your own items too** — the presets are a starting point, not a definition. Everything you tick, preset or custom, feeds the consistency chart.
+
+### 🧘 1-to-1 counselling
+A real conversation with a real person — chat or video, with voice notes. The entire transcript, including any audio, is destroyed two hours after the session ends.
 
 ---
 
-## ✉️ Automated Support & Notifications
-- **Resend REST API Integration**:
-  - **Signup Alerts**: Triggers automated receipt metadata emails (Name, Email, Plan, payment reference ID) to the Admin upon registration.
-  - **Support tickets**: Contact queries submitted inside the app are instantly dispatched to the Admin inbox.
-- Expandable FAQs & Direct Support Helpline: `+91 8078633912`.
+## 💳 Payments
+
+**Currently off.** Everything is free for everyone, with no trial clock and no countdown.
+
+The Razorpay integration is intact and untouched — subscription creation, HMAC verification, entitlement writes — it is simply not reached. Flip `AppConstants.paymentsEnabled` back to `true` and ship a build to bring it back exactly as it was.
+
+Free access ends when a human decides it ends. There is no date in the code that will decide it for you.
 
 ---
 
-## 🛠️ Installation & Setup
+## 🔐 Security model
 
-### 1. Clone & Prepare Environment Variables
-Duplicate `.env.example` to `.env` in the root of the project:
+The app is a public binary; assume everything in it is readable and every request it makes can be forged. So the three things that matter live on the server:
+
+| Concern | Where it lives |
+| --- | --- |
+| Payment creation & verification | Cloud Functions, Razorpay secret in Secret Manager |
+| Entitlement (`premium`, `purchases`) | Server-only fields, no client write path |
+| Admin privilege | A signed Firebase custom claim, never an email or a document field |
+| Outbound email | Cloud Functions, Resend key in Secret Manager |
+
+`firestore.rules` is default-deny, checks ownership on **both** sides of every write, and is covered by an emulator test suite in `../firestore-tests`. App Check attests that requests come from a genuine build.
+
+Release builds block screenshots and screen recording, enforced natively in `onCreate` / `didFinishLaunching` so no frame escapes before Dart starts.
+
+---
+
+## 🛠️ Setup
+
 ```bash
-cp .env.example .env
-```
-Update your keys:
-- **Firebase Keys**: API keys, App ID, and Project IDs.
-- **Razorpay Keys**: Test/Live Key ID, Key Secret, and Subscription Plan IDs.
-- **Resend Email Settings**: Resend API Token and admin destination email.
-
-### 2. Configure Firebase Configs
-1. Android: Place `google-services.json` inside `android/app/`.
-2. iOS: Place `GoogleService-Info.plist` inside `ios/Runner/`.
-
-### 3. Run the App
-Get dependencies:
-```bash
+cp .env.example .env      # Firebase keys
 flutter pub get
-```
-Run on your connected emulator or device:
-```bash
 flutter run
 ```
 
+Place `google-services.json` in `android/app/` and `GoogleService-Info.plist` in `ios/Runner/`.
+
+To regenerate the launcher icon after changing the mark, see the comment above `flutter_launcher_icons` in `pubspec.yaml`, then:
+
+```bash
+dart run flutter_launcher_icons
+```
+
 ---
 
-## 📁 Project Architecture
+## 📁 Architecture
+
 ```
 lib/
-├── main.dart                 # Navigation, Routing Guards & Dotenv Initialization
-├── firebase_options.dart     # Auto-generated Firebase client configs
+├── main.dart                 # Routing, guards, bounded startup
+├── firebase_options.dart
 ├── core/
-│   ├── constants/            # Configuration constants & dynamic dotenv getters
-│   └── theme/                # Spiritual dark violet theme parameters
-├── models/                   # Profile, Entry, and Thoughts models
-├── services/                 # Firebase, Razorpay, Resend Email API integrations
-├── providers/                # Auth & Journal state management providers
-└── screens/                  # 13 Premium layout views
+│   ├── constants/            # Content libraries, professions, config
+│   └── theme/                # Dark violet design tokens
+├── models/                   # Firestore document shapes
+├── services/                 # One service per collection
+├── providers/                # Auth & journal state
+├── widgets/                  # Shared UI
+└── screens/                  # Feature screens
 ```
+
+Startup awaits Firebase with a 15-second bound and nothing else; App Check and notifications initialise **behind** the first frame, because both can hang and a hung app is indistinguishable from a crashed one.

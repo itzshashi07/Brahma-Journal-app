@@ -62,7 +62,7 @@ class SpiritualAvatars {
     SpiritualAvatar(
       id: 'hands',
       asset: 'assets/art/avatars/hands.svg',
-      label: 'Namaste',
+      label: 'Open Palms',
       gradient: [Color(0xFF10B981), Color(0xFF065F46)],
     ),
     SpiritualAvatar(

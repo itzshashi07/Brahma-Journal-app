@@ -151,7 +151,7 @@ class _AppUpdatesScreenState extends State<AppUpdatesScreen> {
       icon: Icons.verified_rounded,
       tint: AppTheme.success,
       title: "You're up to date",
-      subtitle: 'Brahma Journal ${s.currentVersion} is the latest version.',
+      subtitle: 'InnenFlow ${s.currentVersion} is the latest version.',
     );
   }
 

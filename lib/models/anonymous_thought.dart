@@ -1,9 +1,22 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+/// One reply on a reflection.
+///
+/// **Carries no `uid`, and that is the entire point.** Every reply used to
+/// store its author's uid inside the parent thought document — the same
+/// document every signed-in member is allowed to read. So while the reflection
+/// itself was carefully anonymised (authorship was moved out to
+/// /thought_authors, which no client can read), anyone could dump the feed,
+/// read `replies[].uid`, and join it against /profiles to put a real name and
+/// email against every reply on the board. The feature's promise held for the
+/// posts and quietly failed for the conversation underneath them, which is
+/// where people say the more revealing things.
+///
+/// Authorship now goes to /thought_reply_authors, readable only by an admin, so
+/// moderation can still act on a person without the board exposing them.
 class ThoughtReply {
   final String id;
   final String content;
-  final String uid;
   final DateTime createdAt;
   final String anonymousName;
   final String anonymousColor;
@@ -11,7 +24,6 @@ class ThoughtReply {
   ThoughtReply({
     required this.id,
     required this.content,
-    required this.uid,
     required this.createdAt,
     required this.anonymousName,
     required this.anonymousColor,
@@ -21,20 +33,20 @@ class ThoughtReply {
     return ThoughtReply(
       id: data['id'] ?? '',
       content: data['content'] ?? '',
-      uid: data['uid'] ?? '',
       createdAt: data['createdAt'] is Timestamp
           ? (data['createdAt'] as Timestamp).toDate()
           : DateTime.tryParse(data['createdAt']?.toString() ?? '') ?? DateTime.now(),
-      anonymousName: data['anonymousName'] ?? 'Peaceful Soul',
+      anonymousName: data['anonymousName'] ?? 'Quiet Voice',
       anonymousColor: data['anonymousColor'] ?? '#8B5CF6',
     );
   }
 
+  /// Deliberately omits `uid`. Replies written before this change still have
+  /// one stored in Firestore; see [CommunityService.scrubLegacyReplyIds].
   Map<String, dynamic> toMap() {
     return {
       'id': id,
       'content': content,
-      'uid': uid,
       'createdAt': createdAt.toIso8601String(),
       'anonymousName': anonymousName,
       'anonymousColor': anonymousColor,
@@ -72,8 +84,13 @@ class AnonymousThought {
               ?.map((r) => ThoughtReply.fromMap(r as Map<String, dynamic>))
               .toList() ??
           [],
-      anonymousName: data['anonymousName'] ?? 'Peaceful Soul',
+      anonymousName: data['anonymousName'] ?? 'Quiet Voice',
       anonymousColor: data['anonymousColor'] ?? '#8B5CF6',
     );
   }
+
+  /// How many replies this reflection has. The notification feed compares this
+  /// against what the reader has already seen, so it is worth naming rather
+  /// than writing `.replies.length` at four call sites.
+  int get replyCount => replies.length;
 }

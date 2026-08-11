@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import '../core/constants/modern_avatars.dart';
 import '../core/constants/spiritual_avatars.dart';
 import '../core/theme/app_theme.dart';
+import 'modern_avatar_art.dart';
 
 /// A member's avatar.
 ///
@@ -28,6 +30,17 @@ class ProfileAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final avatar = SpiritualAvatars.byId(avatarId);
+
+    // Two kinds of avatar share one id field: a built one ("m:…") is drawn in
+    // code, anything else is a spiritual asset, and an empty id falls back to
+    // initials. Checked here so every screen gets both for free.
+    if (ModernAvatar.isModern(avatarId)) {
+      final built = ModernAvatarArt(
+        avatar: ModernAvatar.parse(avatarId),
+        size: size,
+      );
+      return showRing ? _ring(built) : built;
+    }
 
     final inner = ClipOval(
       child: SizedBox(
@@ -57,7 +70,10 @@ class ProfileAvatar extends StatelessWidget {
     );
 
     if (!showRing) return inner;
+    return _ring(inner);
+  }
 
+  Widget _ring(Widget child) {
     return Container(
       padding: const EdgeInsets.all(2.5),
       decoration: BoxDecoration(
@@ -74,7 +90,7 @@ class ProfileAvatar extends StatelessWidget {
           shape: BoxShape.circle,
           color: AppTheme.bgDark,
         ),
-        child: inner,
+        child: child,
       ),
     );
   }

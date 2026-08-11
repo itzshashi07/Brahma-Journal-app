@@ -8,7 +8,7 @@ import 'support_relay.dart';
 ///
 /// This class used to hold a Resend API key (read from the bundled .env) and
 /// POST directly to api.resend.com. Because the key shipped inside the APK,
-/// anyone could extract it and send mail as Brahma Journal to any address —
+/// anyone could extract it and send mail as InnenFlow to any address —
 /// a ready-made phishing channel aimed at this app's own users. It also
 /// interpolated user-supplied names and messages into HTML without escaping.
 ///

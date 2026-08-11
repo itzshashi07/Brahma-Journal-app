@@ -2,10 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/blog_service.dart';
 import '../../models/blog_post.dart';
+import '../../core/constants/app_constants.dart';
+import '../../core/constants/article_categories.dart';
 import '../../core/theme/app_theme.dart';
+import '../../services/moderation_service.dart';
+import '../../widgets/report_sheet.dart';
+import '../../widgets/community_cta.dart';
 
 class BlogDetailScreen extends StatefulWidget {
   final String blogId;
@@ -18,8 +24,11 @@ class BlogDetailScreen extends StatefulWidget {
 class _BlogDetailScreenState extends State<BlogDetailScreen> {
   final BlogService _blogService = BlogService();
   final _commentCtrl = TextEditingController();
-  final _firestore = BlogService();
   BlogPost? _cachedBlog;
+
+  /// Reading language. English is the written original; Hinglish is the same
+  /// article, not a machine translation, and is only offered where one exists.
+  bool _hinglish = false;
 
   @override
   void dispose() {
@@ -27,11 +36,30 @@ class _BlogDetailScreenState extends State<BlogDetailScreen> {
     super.dispose();
   }
 
+  /// Shares the article itself rather than a fake "link copied" message — the
+  /// old button incremented the counter and told the user it was simulated.
+  Future<void> _shareArticle(BlogPost blog) async {
+    final title = _hinglish && blog.titleHinglish.isNotEmpty
+        ? blog.titleHinglish
+        : blog.title;
+    final body = _hinglish && blog.hasHinglish ? blog.contentHinglish : blog.content;
+    final excerpt = body.length > 400 ? '${body.substring(0, 400).trim()}…' : body;
+
+    await Share.share(
+      '$title\n\n$excerpt\n\n'
+      '— InnenFlow\n'
+      'Join the community: ${AppConstants.communityWhatsAppUrl}\n'
+      'Instagram: ${AppConstants.instagramUrl}',
+      subject: title,
+    );
+    await _blogService.incrementShares(blog.id);
+  }
+
   Future<void> _postComment() async {
     if (_commentCtrl.text.trim().isEmpty) return;
 
     final auth = context.read<AuthProvider>();
-    final commenterName = auth.profile?.name ?? 'Seeker';
+    final commenterName = auth.profile?.name ?? 'Friend';
     final commenterEmail = auth.user?.email ?? '';
 
     try {
@@ -57,7 +85,7 @@ class _BlogDetailScreenState extends State<BlogDetailScreen> {
         backgroundColor: AppTheme.bgCard,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Delete Article?', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary)),
-        content: const Text('Are you sure you want to permanently delete this spiritual article?', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary)),
+        content: const Text('Are you sure you want to permanently delete this article?', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           ElevatedButton(
@@ -113,6 +141,48 @@ class _BlogDetailScreenState extends State<BlogDetailScreen> {
         }
 
         final blog = _cachedBlog!;
+
+        // An article in review is readable by its author and by the admin
+        // reviewing it, and by nobody else — including through a direct link,
+        // which is the only way anyone else could arrive here.
+        if (!blog.visibleTo(viewerUid: auth.user?.uid, isAdmin: auth.isAdmin)) {
+          return Scaffold(
+            body: Container(
+              decoration: const BoxDecoration(gradient: AppTheme.bgGradient),
+              child: SafeArea(
+                child: Column(
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: IconButton(
+                        icon: const Icon(Icons.arrow_back_ios,
+                            color: AppTheme.textPrimary, size: 20),
+                        onPressed: () => context.pop(),
+                      ),
+                    ),
+                    const Expanded(
+                      child: Center(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 32),
+                          child: Text(
+                            'This article has not been published yet.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                fontFamily: 'Outfit',
+                                fontSize: 14,
+                                height: 1.6,
+                                color: AppTheme.textMuted),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+
         final hasLiked = auth.user != null && blog.likes.contains(auth.user!.uid);
         final dateStr = DateFormat('dd MMM yyyy').format(blog.createdAt);
 
@@ -145,26 +215,71 @@ class _BlogDetailScreenState extends State<BlogDetailScreen> {
                             textAlign: TextAlign.center,
                           ),
                         ),
-                        if (auth.isAdmin) ...[
+                        // An author can remove their own article; an admin can
+                        // remove anyone's. Both paths are enforced again in
+                        // firestore.rules — this only hides a button that would
+                        // otherwise fail.
+                        if (auth.isAdmin ||
+                            (auth.user != null && blog.uid == auth.user!.uid)) ...[
                           IconButton(
                             icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
                             onPressed: () => _confirmDeleteBlog(context, blog.id),
                           ),
                           const SizedBox(width: 4),
                         ],
+                        // Reporting and blocking are offered on somebody
+                        // else's article only: flagging your own writing is
+                        // meaningless, and the delete control above is what you
+                        // actually want for it.
+                        if (auth.user != null && blog.uid != auth.user!.uid)
+                          PopupMenuButton<String>(
+                            icon: const Icon(Icons.more_vert,
+                                color: AppTheme.textPrimary, size: 20),
+                            color: AppTheme.bgCard,
+                            onSelected: (value) async {
+                              if (value == 'report') {
+                                await ReportSheet.show(
+                                  context,
+                                  contentKind: 'blog',
+                                  contentId: blog.id,
+                                  excerpt: blog.title,
+                                  reportedUid: blog.uid,
+                                );
+                              } else if (value == 'block') {
+                                await ModerationService().blockUser(blog.uid);
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                        'Blocked. You will not see ${blog.authorName}\'s writing again.',
+                                        style: const TextStyle(fontFamily: 'Outfit')),
+                                    backgroundColor: AppTheme.primary,
+                                  ),
+                                );
+                              }
+                            },
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(
+                                value: 'report',
+                                child: Text('Report this article',
+                                    style: TextStyle(
+                                        fontFamily: 'Outfit',
+                                        fontSize: 13,
+                                        color: AppTheme.textPrimary)),
+                              ),
+                              PopupMenuItem(
+                                value: 'block',
+                                child: Text('Block this author',
+                                    style: TextStyle(
+                                        fontFamily: 'Outfit',
+                                        fontSize: 13,
+                                        color: AppTheme.textPrimary)),
+                              ),
+                            ],
+                          ),
                         IconButton(
                           icon: const Icon(Icons.share_outlined, color: AppTheme.textPrimary, size: 20),
-                          onPressed: () {
-                            _blogService.incrementShares(blog.id);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: const Text('Link copied to clipboard! (Simulated)'),
-                                backgroundColor: AppTheme.primary,
-                                behavior: SnackBarBehavior.floating,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                              ),
-                            );
-                          },
+                          onPressed: () => _shareArticle(blog),
                         ),
                       ],
                     ),
@@ -177,6 +292,75 @@ class _BlogDetailScreenState extends State<BlogDetailScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // Only ever seen by the author or the admin — anyone
+                          // else was turned away above.
+                          if (!blog.isPublished) ...[
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: (blog.status == BlogStatus.rejected
+                                        ? Colors.redAccent
+                                        : AppTheme.accent)
+                                    .withValues(alpha: 0.10),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: (blog.status == BlogStatus.rejected
+                                          ? Colors.redAccent
+                                          : AppTheme.accent)
+                                      .withValues(alpha: 0.35),
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    blog.status.label,
+                                    style: TextStyle(
+                                      fontFamily: 'Outfit',
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: blog.status == BlogStatus.rejected
+                                          ? Colors.redAccent
+                                          : AppTheme.accentLight,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    blog.reviewNote.isNotEmpty
+                                        ? blog.reviewNote
+                                        : 'Only you and the InnenFlow team can '
+                                            'read this until it is approved.',
+                                    style: const TextStyle(
+                                        fontFamily: 'Outfit',
+                                        fontSize: 12,
+                                        height: 1.5,
+                                        color: AppTheme.textSecondary),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                          ],
+
+                          // Category — the app bar truncates the title, so the
+                          // reader gets the subject and the full headline here.
+                          _CategoryChip(category: blog.category),
+                          const SizedBox(height: 12),
+                          Text(
+                            _hinglish && blog.titleHinglish.isNotEmpty
+                                ? blog.titleHinglish
+                                : blog.title,
+                            style: const TextStyle(
+                              fontFamily: 'Outfit',
+                              fontSize: 24,
+                              height: 1.3,
+                              fontWeight: FontWeight.w800,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+
                           // Author & Metadata Row
                           Row(
                             children: [
@@ -207,7 +391,7 @@ class _BlogDetailScreenState extends State<BlogDetailScreen> {
                                     ),
                                   ),
                                   Text(
-                                    '$dateStr • Spiritual Guide',
+                                    dateStr,
                                     style: const TextStyle(
                                       fontFamily: 'Outfit',
                                       fontSize: 11,
@@ -220,16 +404,33 @@ class _BlogDetailScreenState extends State<BlogDetailScreen> {
                           ),
                           const SizedBox(height: 20),
 
+                          // Language switch — only where a Hinglish version was
+                          // actually written. Offering a toggle that silently
+                          // shows the same English text would be worse than no
+                          // toggle at all.
+                          if (blog.hasHinglish) ...[
+                            _LanguageSwitch(
+                              hinglish: _hinglish,
+                              onChanged: (v) => setState(() => _hinglish = v),
+                            ),
+                            const SizedBox(height: 18),
+                          ],
+
                           // Content Body
                           Text(
-                            blog.content,
+                            _hinglish && blog.hasHinglish
+                                ? blog.contentHinglish
+                                : blog.content,
                             style: const TextStyle(
                               fontFamily: 'Outfit',
                               fontSize: 15,
                               color: AppTheme.textSecondary,
-                              height: 1.6,
+                              height: 1.7,
                             ),
                           ),
+                          const SizedBox(height: 24),
+
+                          const CommunityCta(),
                           const SizedBox(height: 24),
 
                           // Like & Share Counts
@@ -327,13 +528,33 @@ class _BlogDetailScreenState extends State<BlogDetailScreen> {
                                                 color: AppTheme.primaryLight,
                                               ),
                                             ),
-                                            Text(
-                                              timeStr,
-                                              style: const TextStyle(
-                                                fontFamily: 'Outfit',
-                                                fontSize: 11,
-                                                color: AppTheme.textMuted,
-                                              ),
+                                            Row(
+                                              children: [
+                                                Text(
+                                                  timeStr,
+                                                  style: const TextStyle(
+                                                    fontFamily: 'Outfit',
+                                                    fontSize: 11,
+                                                    color: AppTheme.textMuted,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                GestureDetector(
+                                                  behavior: HitTestBehavior.opaque,
+                                                  onTap: () => ReportSheet.show(
+                                                    context,
+                                                    contentKind: 'comment',
+                                                    contentId: comment.id,
+                                                    parentId: blog.id,
+                                                    excerpt: comment.content,
+                                                    reportedUid: comment.uid,
+                                                  ),
+                                                  child: const Icon(
+                                                      Icons.flag_outlined,
+                                                      size: 13,
+                                                      color: AppTheme.textMuted),
+                                                ),
+                                              ],
                                             ),
                                           ],
                                         ),
@@ -413,6 +634,92 @@ class _BlogDetailScreenState extends State<BlogDetailScreen> {
           ),
         );
       },
+    );
+  }
+}
+
+class _CategoryChip extends StatelessWidget {
+  final String category;
+  const _CategoryChip({required this.category});
+
+  @override
+  Widget build(BuildContext context) {
+    final cat = ArticleCategories.byId(category);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: cat.color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(AppTheme.radiusPill),
+        border: Border.all(color: cat.color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(cat.icon, size: 13, color: cat.color),
+          const SizedBox(width: 6),
+          Text(
+            cat.label.toUpperCase(),
+            style: TextStyle(
+              fontFamily: 'Outfit',
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: cat.color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// English ⇄ Hinglish, as a two-segment switch rather than a dropdown: there
+/// are exactly two options and both should be visible without a tap.
+class _LanguageSwitch extends StatelessWidget {
+  final bool hinglish;
+  final ValueChanged<bool> onChanged;
+
+  const _LanguageSwitch({required this.hinglish, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppTheme.bgCard,
+        borderRadius: BorderRadius.circular(AppTheme.radiusPill),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _seg('English', !hinglish, () => onChanged(false)),
+          _seg('Hinglish', hinglish, () => onChanged(true)),
+        ],
+      ),
+    );
+  }
+
+  Widget _seg(String label, bool active, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+        decoration: BoxDecoration(
+          gradient: active ? AppTheme.primaryGradient : null,
+          borderRadius: BorderRadius.circular(AppTheme.radiusPill),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontFamily: 'Outfit',
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+            color: active ? Colors.white : AppTheme.textMuted,
+          ),
+        ),
+      ),
     );
   }
 }

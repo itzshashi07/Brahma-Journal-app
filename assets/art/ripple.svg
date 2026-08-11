@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <!--
+    Replaces om.svg, which was a religious symbol from one tradition sitting on
+    an onboarding slide shown to everybody.
+
+    Concentric arcs turning inward: the same idea the app is named for, with
+    nothing to opt into. Stroked rather than filled so it tints cleanly to any
+    colour, like the other motifs.
+  -->
+  <circle cx="50" cy="50" r="6" fill="currentColor"/>
+  <path d="M50 30a20 20 0 1 1-20 20" stroke="currentColor" stroke-width="5.5" stroke-linecap="round"/>
+  <path d="M50 17a33 33 0 1 0 33 33" stroke="currentColor" stroke-width="5.5" stroke-linecap="round"/>
+  <path d="M50 4a46 46 0 1 1-46 46" stroke="currentColor" stroke-width="5.5" stroke-linecap="round" opacity="0.55"/>
+</svg>

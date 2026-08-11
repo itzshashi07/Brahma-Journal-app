@@ -6,18 +6,28 @@ import '../../providers/journal_provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/constants/thoughts_365.dart';
+import '../../core/utils/stats_utils.dart';
 import '../../widgets/sacred.dart';
 import '../../widgets/free_access.dart';
 import '../../widgets/update_dialog.dart';
+import '../../widgets/welcome_celebration.dart';
+import '../../widgets/thought_banner.dart';
+import '../../widgets/quick_prompt.dart';
 import '../checkin/daily_checkin_sheet.dart';
+import '../games/game_catalog.dart';
+import 'thought_picker_sheet.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../widgets/profile_avatar.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:async';
 import 'dart:math';
+import '../../models/counselling_session.dart';
 import '../../services/app_update_service.dart';
+import '../../services/counselling_service.dart';
+import '../../services/notification_center.dart';
 import '../../services/profile_service.dart';
+import '../../services/streak_service.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -29,20 +39,14 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   String _thoughtOfDay = '';
   bool _showChatbot = false;
-  final TextEditingController _chatCtrl = TextEditingController();
-  final ScrollController _chatScrollCtrl = ScrollController();
   StreamSubscription? _thoughtSubscription;
 
-  final List<Map<String, dynamic>> _messages = [
-    {
-      'type': 'bot',
-      'message': '🙏 Namaste! I\'m your AI Spiritual Counselor. I\'m here to guide you through life\'s challenges with ancient wisdom and modern psychology.',
-    },
-    {
-      'type': 'bot',
-      'message': 'I can help you with stress management, relationship guidance, career decisions, spiritual growth, and emotional healing. How can I support your journey today?',
-    },
-  ];
+  // The canned-reply chatbot that used to live here is gone. It held a
+  // controller, a scroll controller, a message list and a random-response
+  // generator — none of which were ever rendered, because the sheet has no
+  // input field. Talking to a person now happens in /counselling, which is a
+  // real conversation with a real counsellor rather than a shuffled list of
+  // reassuring sentences.
 
   @override
   void initState() {
@@ -67,9 +71,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           });
         }
       } else {
-        final dayOfYear = DateTime.now().difference(DateTime(DateTime.now().year, 1, 1)).inDays + 1;
         setState(() {
-          _thoughtOfDay = Thoughts365.getThoughtForDay(dayOfYear);
+          _thoughtOfDay =
+              Thoughts365.getThoughtForDay(Thoughts365.dayOfYear(DateTime.now()));
         });
       }
     });
@@ -82,9 +86,55 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // Automatically sync profile stats on launch to fix any Firestore mismatches
       ProfileService().syncProfileStats(auth.user!.uid);
     }
+    // Before anything else that can interrupt: the greeting belongs to the
+    // sign-in that just happened, and it reads as an afterthought if an update
+    // prompt or the check-in sheet gets there first.
+    await _maybeCelebrate();
     // Check for app update
     _checkForUpdate();
-    _maybeCheckIn();
+    await _maybeCheckIn();
+    // If the check-in did not run — already journalled, already dismissed —
+    // there may still be a gap worth one small question. JournalNudge decides;
+    // it is rate-limited, random, and silent when today's entry is complete.
+    if (mounted) await JournalNudge.maybeShow(context);
+  }
+
+  /// The welcome celebration, once per sign-in.
+  ///
+  /// Gated on [AuthProvider.consumeJustSignedIn] rather than on a stored date,
+  /// because the popup marks an *event* — someone signing in — and not a day.
+  /// Reaching the dashboard any other way (returning from the journal, a cold
+  /// start on a saved session) leaves it silent, which is the difference
+  /// between a greeting and a nag.
+  Future<void> _maybeCelebrate() async {
+    final auth = context.read<AuthProvider>();
+    if (!auth.consumeJustSignedIn()) return;
+
+    // "New" means the account was created in the last few minutes — i.e. this
+    // sign-in is the one that followed registration.
+    //
+    // Read from the Firebase user's own metadata rather than from the profile
+    // document: on a brand new account the profile write has often not come
+    // back through its snapshot listener yet, so `profile.createdAt` is null at
+    // exactly the moment it matters and every new member was greeted as a
+    // returning one. The auth metadata is there the instant the credential is.
+    final created = auth.user?.metadata.creationTime;
+    final isNew = created != null &&
+        DateTime.now().difference(created) < const Duration(minutes: 10);
+
+    // A beat after the dashboard has drawn, so the card rises over a finished
+    // screen rather than over one still filling in.
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+    if (!mounted) return;
+
+    await WelcomeCelebration.show(
+      context,
+      name: auth.profile?.displayName ??
+          auth.user?.displayName ??
+          auth.user?.email?.split('@').first ??
+          'Friend',
+      isNewMember: isNew,
+    );
   }
 
   /// Opens the daily check-in once a day.
@@ -109,6 +159,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // A beat after launch so it does not collide with the opening animation.
     await Future<void>.delayed(const Duration(milliseconds: 900));
     if (!mounted) return;
+    // Stamped so a random prompt cannot arrive on the heels of the check-in.
+    await JournalNudge.markCheckInShown();
     await DailyCheckInSheet.show(context);
   }
 
@@ -122,74 +174,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  void _sendMessage() {
-    if (_chatCtrl.text.trim().isEmpty) return;
-    final userMsg = _chatCtrl.text.trim();
-    _chatCtrl.clear();
-    setState(() {
-      _messages.add({'type': 'user', 'message': userMsg});
-    });
-    Future.delayed(const Duration(milliseconds: 800), () {
-      if (mounted) {
-        final response = AppConstants.chatbotResponses[
-            Random().nextInt(AppConstants.chatbotResponses.length)];
-        setState(() {
-          _messages.add({'type': 'bot', 'message': response});
-        });
-        Future.delayed(const Duration(milliseconds: 100), () {
-          if (_chatScrollCtrl.hasClients) {
-            _chatScrollCtrl.animateTo(
-              _chatScrollCtrl.position.maxScrollExtent,
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeOut,
-            );
-          }
-        });
-      }
-    });
-  }
-
   @override
   void dispose() {
-    _chatCtrl.dispose();
-    _chatScrollCtrl.dispose();
     _thoughtSubscription?.cancel();
     super.dispose();
   }
 
-  void _showEditThoughtDialog() {
-    final controller = TextEditingController(text: _thoughtOfDay);
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.bgCard,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Update Thought of the Day', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary)),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLines: 4,
-          style: const TextStyle(color: AppTheme.textPrimary, fontFamily: 'Outfit'),
-          decoration: const InputDecoration(hintText: 'Type custom thought...'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              final text = controller.text.trim();
-              if (text.isNotEmpty) {
-                await FirebaseFirestore.instance.collection('metadata').doc('thought_of_the_day').set({
-                  'text': text,
-                  'updatedAt': FieldValue.serverTimestamp(),
-                });
-                if (mounted) Navigator.pop(ctx);
-              }
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
+  /// Admin: choose today's thought from the bundled library, or write one.
+  ///
+  /// Was a bare text box, which meant the 365 lines already written for this
+  /// app were unreachable unless you happened to remember one word for word.
+  Future<void> _showEditThoughtDialog() async {
+    await ThoughtPickerSheet.show(context, _thoughtOfDay);
+    // No setState needed: the banner is driven by a Firestore snapshot
+    // listener, so it updates itself the moment the write lands.
   }
 
   @override
@@ -197,7 +195,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final auth = context.watch<AuthProvider>();
     final journal = context.watch<JournalProvider>();
     final profile = auth.profile;
-    final displayName = profile?.displayName ?? auth.user?.email?.split('@').first ?? 'Soul';
+    final displayName = profile?.displayName ?? auth.user?.email?.split('@').first ?? 'Friend';
 
     return Scaffold(
       body: SacredBackdrop(
@@ -218,7 +216,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Namaste, $displayName',
+                                'Hello, $displayName',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
@@ -235,14 +233,64 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         ),
                         Row(
                           children: [
+                            // Was "share the app". The app is not on any store
+                            // yet, so sharing it sent people to a link they
+                            // cannot install from — the WhatsApp community is
+                            // where someone can actually be told when it is.
                             IconButton(
-                              icon: const Icon(Icons.share_outlined, color: AppTheme.textSecondary),
-                              onPressed: () => AppUpdateService.shareApp(),
+                              tooltip: 'Join the community',
+                              icon: const Icon(Icons.groups_outlined, color: AppTheme.textSecondary),
+                              onPressed: () => _openCommunity(),
                             ),
                             const SizedBox(width: 2),
-                            IconButton(
-                              icon: const Icon(Icons.notifications_none_outlined, color: AppTheme.textSecondary),
-                              onPressed: () => context.push('/notifications'),
+                            // A red count, not just a bell. The old icon looked
+                            // identical whether four things had happened or
+                            // none, so nobody ever opened it.
+                            Consumer<NotificationCenter>(
+                              builder: (_, centre, __) => Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  IconButton(
+                                    icon: Icon(
+                                      centre.hasUnread
+                                          ? Icons.notifications_active_rounded
+                                          : Icons.notifications_none_outlined,
+                                      color: centre.hasUnread
+                                          ? AppTheme.accentLight
+                                          : AppTheme.textSecondary,
+                                    ),
+                                    onPressed: () => context.push('/notifications'),
+                                  ),
+                                  if (centre.hasUnread)
+                                    Positioned(
+                                      right: 4,
+                                      top: 4,
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 5, vertical: 1),
+                                        constraints: const BoxConstraints(minWidth: 17),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFEF4444),
+                                          borderRadius: BorderRadius.circular(999),
+                                          border: Border.all(
+                                              color: AppTheme.bgDark, width: 1.5),
+                                        ),
+                                        child: Text(
+                                          centre.unreadCount > 9
+                                              ? '9+'
+                                              : '${centre.unreadCount}',
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
+                                            fontFamily: 'Outfit',
+                                            fontSize: 9.5,
+                                            fontWeight: FontWeight.w800,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ),
                             const SizedBox(width: 2),
                             IconButton(
@@ -290,84 +338,85 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     const SizedBox(height: 20),
 
+                    // Directly under the streak number, because that is the
+                    // number it is talking about. Renders nothing at all unless
+                    // there is exactly one day to repair.
+                    const _StreakRecoveryCard(),
+
                     // Free-access countdown — the offer is the headline while
                     // billing is switched off, so it sits above the fold.
                     const FreeAccessBanner(),
                     const SizedBox(height: 20),
 
                     // Thought of the Day
-                    Container(
-                      padding: const EdgeInsets.all(18),
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF4338CA), Color(0xFF7C3AED)],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              const Icon(Icons.lightbulb_outline, size: 18, color: Colors.white),
-                              const SizedBox(width: 8),
-                              const Text(
-                                'Thought of the Day',
-                                style: TextStyle(
-                                  fontFamily: 'Outfit', fontSize: 15, fontWeight: FontWeight.w700,
-                                  color: Colors.white,
-                                ),
-                              ),
-                              const Spacer(),
-                              if (auth.isAdmin) ...[
-                                GestureDetector(
-                                  onTap: _showEditThoughtDialog,
-                                  child: const Icon(Icons.edit_outlined, size: 18, color: Colors.white70),
-                                ),
-                              ],
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          Text(
-                            '"$_thoughtOfDay"',
-                            style: const TextStyle(
-                              fontFamily: 'Outfit', fontSize: 17, color: Colors.white,
-                              fontStyle: FontStyle.italic, height: 1.5,
-                            ),
-                          ),
-                        ],
-                      ),
+                    ThoughtBanner(
+                      text: _thoughtOfDay,
+                      onEdit: auth.isAdmin ? _showEditThoughtDialog : null,
                     ),
                     const SizedBox(height: 20),
 
-                    // Navigation Grid
-                    const Text(
-                      'Your Journey',
-                      style: TextStyle(
-                        fontFamily: 'Outfit', fontSize: 21, fontWeight: FontWeight.w700,
-                        color: AppTheme.textPrimary,
-                      ),
+                    // Navigation, grouped by what the person came to DO.
+                    //
+                    // This was one flat nine-tile grid under a single heading,
+                    // and nine equally-weighted tiles is not a menu — it is a
+                    // wall. Nothing told you that Journal and Affirmations are
+                    // the same kind of act, or that the Community screen is a
+                    // leaderboard rather than a chat room, so the way to find
+                    // anything was to read all nine every time.
+                    //
+                    // Four intentions, two or three tiles each. The headings
+                    // are verbs on purpose: a section called "Write" answers
+                    // "what am I about to do", which is the question somebody
+                    // opening this screen actually has.
+                    const _NavSection(
+                      label: 'Write',
+                      tagline: 'Get the day out of your head',
+                      accent: AppTheme.primary,
+                      cards: [
+                        _NavCard(icon: Icons.book_outlined, title: 'Journal', subtitle: 'Today, in your words', route: '/journal', color: AppTheme.primary),
+                        _NavCard(icon: Icons.auto_awesome_outlined, title: 'Affirmations', subtitle: 'Steady the self-talk', route: '/affirmations', color: Color(0xFF059669)),
+                        _NavCard(icon: Icons.chat_bubble_outline_outlined, title: 'Open Board', subtitle: 'Say it anonymously', route: '/thoughts', color: Color(0xFFD97706)),
+                      ],
                     ),
-                    const SizedBox(height: 12),
-                    GridView.count(
-                      crossAxisCount: 2,
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 12,
-                      childAspectRatio: 1.2,
-                      children: [
-                        _NavCard(icon: Icons.book_outlined, title: 'Journal', subtitle: 'Daily reflection', route: '/journal', color: AppTheme.primary),
-                        _NavCard(icon: Icons.spa_outlined, title: 'Meditation', subtitle: 'Find inner peace', route: '/meditation', color: const Color(0xFF0891B2)),
-                        _NavCard(icon: Icons.menu_book_outlined, title: 'Gita in Real Life', subtitle: 'Wisdom for your situation', route: '/gita', color: const Color(0xFFF59E0B)),
-                        _NavCard(icon: Icons.auto_awesome_outlined, title: 'Affirmations', subtitle: 'Positive mindset', route: '/affirmations', color: const Color(0xFF059669)),
-                        _NavCard(icon: Icons.chat_bubble_outline_outlined, title: 'Thoughts', subtitle: 'Share anonymously', route: '/thoughts', color: const Color(0xFFD97706)),
-                        _NavCard(icon: Icons.people_outline, title: 'Community', subtitle: 'Fellow seekers', route: '/community', color: const Color(0xFF7C3AED)),
-                        _NavCard(icon: Icons.analytics_outlined, title: 'Analytics', subtitle: 'Track progress', route: '/analytics', color: const Color(0xFFDC2626)),
-                        _NavCard(icon: Icons.article_outlined, title: 'Sanctuary', subtitle: 'Blogs & Articles', route: '/blogs', color: const Color(0xFFEC4899)),
-                        _NavCard(icon: Icons.shopping_bag_outlined, title: 'Library Store', subtitle: 'Books & Resources', route: '/products', color: const Color(0xFF10B981)),
+                    const SizedBox(height: 26),
+
+                    const _NavSection(
+                      label: 'Read',
+                      tagline: 'Borrow some clarity',
+                      accent: Color(0xFFF59E0B),
+                      cards: [
+                        _NavCard(icon: Icons.menu_book_outlined, title: 'Wisdom', subtitle: 'Old answers, real situations', route: '/gita', color: Color(0xFFF59E0B)),
+                        _NavCard(icon: Icons.article_outlined, title: 'Articles', subtitle: 'Written by people here', route: '/blogs', color: Color(0xFFEC4899)),
+                        _NavCard(icon: Icons.shopping_bag_outlined, title: 'Library', subtitle: 'Books & long reads', route: '/products', color: Color(0xFF10B981)),
+                      ],
+                    ),
+                    const SizedBox(height: 26),
+
+                    const _NavSection(
+                      label: 'Unwind',
+                      tagline: 'Slow the whole thing down',
+                      accent: Color(0xFF0891B2),
+                      cards: [
+                        _NavCard(icon: Icons.spa_outlined, title: 'Meditation', subtitle: 'Sit with it a while', route: '/meditation', color: Color(0xFF0891B2)),
+                        _NavCard(icon: Icons.sports_esports_outlined, title: 'Game Zone', subtitle: 'Reset your focus', route: '/games', color: Color(0xFF8B5CF6)),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+
+                    // The shuffled strip of individual games, kept directly
+                    // under the section it belongs to rather than floating at
+                    // the bottom of the screen with no heading above it.
+                    const _GameZoneSection(),
+                    const SizedBox(height: 26),
+
+                    const _NavSection(
+                      label: 'Track',
+                      tagline: 'Proof that you showed up',
+                      accent: Color(0xFFDC2626),
+                      cards: [
+                        _NavCard(icon: Icons.analytics_outlined, title: 'Your Patterns', subtitle: 'What the entries add up to', route: '/analytics', color: Color(0xFFDC2626)),
+                        _NavCard(icon: Icons.people_outline, title: 'Streak Board', subtitle: 'Everyone still going', route: '/community', color: Color(0xFF7C3AED)),
+                        _NavCard(icon: Icons.emoji_events_outlined, title: 'Game Ranks', subtitle: 'Top scores this week', route: '/games/leaderboard', color: Color(0xFFF59E0B)),
                       ],
                     ),
                     const SizedBox(height: 40),
@@ -408,6 +457,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  /// The WhatsApp community — updates, and the place people hear that the app
+  /// has reached a store.
+  Future<void> _openCommunity() async {
+    final url = Uri.parse(AppConstants.communityWhatsAppUrl);
+    try {
+      if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+        throw 'Could not open the community link';
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not open the community: $e',
+                style: const TextStyle(fontFamily: 'Outfit')),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _launchWhatsApp() async {
     final Uri url = Uri.parse('https://wa.me/918078633912');
     try {
@@ -423,7 +493,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  /// The 🤖 sheet.
+  ///
+  /// Two completely different jobs behind one button, because the person
+  /// pressing it wants opposite things depending on who they are. A member is
+  /// asking for help and gets the ways in. An admin *is* the help — showing
+  /// them an intake form and a ₹299 price tag was asking the counsellor to book
+  /// a session with themselves, so they get the live conversations instead.
   Widget _buildChatbotModal() {
+    final isAdmin = context.watch<AuthProvider>().isAdmin;
+
     return Positioned.fill(
       child: GestureDetector(
         onTap: () => setState(() => _showChatbot = false),
@@ -468,14 +547,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     )
                                   ]
                                 ),
-                                child: const Center(child: Text('🤖', style: TextStyle(fontSize: 22))),
+                                child: Center(
+                                    child: Text(isAdmin ? '💬' : '🤖',
+                                        style: const TextStyle(fontSize: 22))),
                               ),
                               const SizedBox(width: 12),
-                              const Column(
+                              Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text('Brahma AI Coach', style: TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.w700, fontSize: 17, color: AppTheme.textPrimary)),
-                                  Text('Psychological Analysis', style: TextStyle(fontFamily: 'Outfit', fontSize: 12, color: AppTheme.textMuted)),
+                                  Text(isAdmin ? 'Counselling desk' : 'InnenFlow Coach', style: const TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.w700, fontSize: 17, color: AppTheme.textPrimary)),
+                                  Text(isAdmin ? 'Everyone waiting on you' : 'Psychological Analysis', style: const TextStyle(fontFamily: 'Outfit', fontSize: 12, color: AppTheme.textMuted)),
                                 ],
                               ),
                               const Spacer(),
@@ -490,7 +571,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         
                         // Main Scroll Content
                         Expanded(
-                          child: SingleChildScrollView(
+                          child: isAdmin
+                              ? _AdminChatsPanel(
+                                  onOpen: (route) {
+                                    setState(() => _showChatbot = false);
+                                    context.push(route);
+                                  },
+                                )
+                              : SingleChildScrollView(
                             padding: const EdgeInsets.symmetric(horizontal: 20),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -508,12 +596,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        '🚀 Feature Coming Soon / Under Development',
+                                        '🚀 AI analysis is still being built',
                                         style: TextStyle(fontFamily: 'Outfit', color: Color(0xFF818CF8), fontSize: 14, fontWeight: FontWeight.bold),
                                       ),
                                       SizedBox(height: 6),
                                       Text(
-                                        'This is an advanced feature which is currently under development. In the future, Brahma AI will analyze your conversation like a real psychiatrist to help track emotional patterns.',
+                                        'In time, the coach will read your entries for emotional patterns. Until then you get the better version of this: a real human counsellor, available below.',
                                         style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 12, height: 1.4),
                                       ),
                                     ],
@@ -528,7 +616,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 ),
                                 const SizedBox(height: 6),
                                 const Text(
-                                  'If you need an urgent session, you can book a 1-to-1 consultation with a qualified mental health psychiatrist right now.',
+                                  'If today feels like too much, you can book a private 1-to-1 session and talk it through with someone right now.',
                                   style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 13),
                                 ),
                                 const SizedBox(height: 16),
@@ -580,7 +668,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                         ),
                                       ),
                                       const SizedBox(height: 10),
-                                      _buildBulletPoint('One-to-one confidential consultation with a qualified mental health professional.'),
+                                      _buildBulletPoint('A private, confidential one-to-one conversation.'),
                                       _buildBulletPoint('Personalized emotional assessment based on your concerns and current situation.'),
                                       _buildBulletPoint('Practical coping strategies for stress, anxiety, overthinking, relationship issues, and emotional well-being.'),
                                       _buildBulletPoint('Guidance on improving mental wellness with actionable daily practices.'),
@@ -590,7 +678,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 ),
                                 const SizedBox(height: 24),
                                 
-                                // Booking Buttons
+                                // The two ways in. "Fill Form" is the general
+                                // support form; "Connect Now" opens the
+                                // counselling room with the operator — a real
+                                // chat, not a WhatsApp hand-off that leaves the
+                                // app and loses the thread.
                                 Row(
                                   children: [
                                     Expanded(
@@ -604,29 +696,51 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                           padding: const EdgeInsets.symmetric(vertical: 14),
                                         ),
-                                        child: const Text('Fill Form', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.primaryLight, fontSize: 14, fontWeight: FontWeight.w600)),
+                                        child: const Column(
+                                          children: [
+                                            Text('Fill Form', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.primaryLight, fontSize: 14, fontWeight: FontWeight.w600)),
+                                            Text('Send us a message', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textMuted, fontSize: 10)),
+                                          ],
+                                        ),
                                       ),
                                     ),
                                     const SizedBox(width: 12),
                                     Expanded(
                                       child: ElevatedButton(
-                                        onPressed: _launchWhatsApp,
+                                        onPressed: () {
+                                          setState(() => _showChatbot = false);
+                                          context.push('/counselling');
+                                        },
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor: const Color(0xFF10B981),
                                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                          padding: const EdgeInsets.symmetric(vertical: 14),
+                                          padding: const EdgeInsets.symmetric(vertical: 10),
                                         ),
-                                        child: const Row(
-                                          mainAxisAlignment: MainAxisAlignment.center,
+                                        child: const Column(
                                           children: [
-                                            Icon(Icons.chat_bubble_outline, size: 16, color: Colors.white),
-                                            SizedBox(width: 6),
-                                            Text('Connect Now', style: TextStyle(fontFamily: 'Outfit', color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
+                                            Row(
+                                              mainAxisAlignment: MainAxisAlignment.center,
+                                              children: [
+                                                Icon(Icons.chat_bubble_outline, size: 15, color: Colors.white),
+                                                SizedBox(width: 6),
+                                                Text('Connect Now', style: TextStyle(fontFamily: 'Outfit', color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
+                                              ],
+                                            ),
+                                            Text('Chat with a counsellor', style: TextStyle(fontFamily: 'Outfit', color: Colors.white70, fontSize: 10)),
                                           ],
                                         ),
                                       ),
                                     ),
                                   ],
+                                ),
+                                const SizedBox(height: 12),
+                                Center(
+                                  child: TextButton.icon(
+                                    onPressed: _launchWhatsApp,
+                                    icon: const Icon(Icons.support_agent_outlined, size: 15, color: AppTheme.textMuted),
+                                    label: const Text('Or reach us on WhatsApp',
+                                        style: TextStyle(fontFamily: 'Outfit', fontSize: 12, color: AppTheme.textMuted)),
+                                  ),
                                 ),
                                 const SizedBox(height: 30),
                               ],
@@ -669,6 +783,182 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (hour < 12) return 'Good Morning';
     if (hour < 17) return 'Good Afternoon';
     return 'Good Evening';
+  }
+}
+
+/// The Game Zone strip on the home screen.
+///
+/// A heading, a shuffled handful of games and a way into the full list. It is
+/// shuffled per build on purpose: a fixed five would mean the other ten are
+/// never discovered by anyone who does not tap through.
+class _GameZoneSection extends StatefulWidget {
+  const _GameZoneSection();
+
+  @override
+  State<_GameZoneSection> createState() => _GameZoneSectionState();
+}
+
+class _GameZoneSectionState extends State<_GameZoneSection> {
+  late final List<GameEntry> _featured;
+
+  @override
+  void initState() {
+    super.initState();
+    _featured = ([...kGames]..shuffle(Random())).take(6).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text(
+              'Game Zone',
+              style: TextStyle(
+                fontFamily: 'Outfit', fontSize: 21, fontWeight: FontWeight.w700,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppTheme.accent.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(AppTheme.radiusPill),
+                border: Border.all(color: AppTheme.accent.withValues(alpha: 0.4)),
+              ),
+              child: Text(
+                '${kGames.length} games',
+                style: const TextStyle(
+                  fontFamily: 'Outfit', fontSize: 10.5, fontWeight: FontWeight.w600,
+                  color: AppTheme.accentLight,
+                ),
+              ),
+            ),
+            const Spacer(),
+            GestureDetector(
+              onTap: () => context.push('/games'),
+              child: const Row(
+                children: [
+                  Text(
+                    'See all',
+                    style: TextStyle(
+                        fontFamily: 'Outfit', fontSize: 13, color: AppTheme.primaryLight),
+                  ),
+                  Icon(Icons.chevron_right_rounded,
+                      size: 18, color: AppTheme.primaryLight),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Two minutes of attention training. Scored, and kept separate from your meditation minutes.',
+          style: TextStyle(
+              fontFamily: 'Outfit', fontSize: 12.5, height: 1.4, color: AppTheme.textMuted),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 132,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: _featured.length + 1,
+            separatorBuilder: (_, __) => const SizedBox(width: 12),
+            itemBuilder: (_, i) => i == _featured.length
+                ? _AllGamesTile(onTap: () => context.push('/games'))
+                : _GameTile(game: _featured[i]),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _GameTile extends StatelessWidget {
+  final GameEntry game;
+
+  const _GameTile({required this.game});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 148,
+      child: GlassCard(
+        onTap: () => openGame(context, game),
+        padding: const EdgeInsets.all(AppTheme.space3),
+        radius: AppTheme.radiusMd,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: game.colors),
+                borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+              ),
+              child: Icon(game.icon, color: Colors.white, size: 19),
+            ),
+            const Spacer(),
+            Text(
+              game.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontFamily: 'Outfit', fontSize: 14.5, fontWeight: FontWeight.w700,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              game.subtitle,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontFamily: 'Outfit', fontSize: 10.5, height: 1.3, color: AppTheme.textMuted),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AllGamesTile extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _AllGamesTile({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 120,
+      child: GlassCard(
+        onTap: onTap,
+        padding: const EdgeInsets.all(AppTheme.space3),
+        radius: AppTheme.radiusMd,
+        highlighted: true,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.sports_esports_outlined,
+                color: AppTheme.primaryLight, size: 28),
+            const SizedBox(height: 8),
+            Text(
+              'All ${kGames.length}\ngames',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontFamily: 'Outfit', fontSize: 13, fontWeight: FontWeight.w700,
+                height: 1.3, color: AppTheme.textPrimary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -727,6 +1017,96 @@ class _StatCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// A named group of destinations on the home screen.
+///
+/// The heading is doing real work, not decoration. Its job is to let somebody
+/// skip three quarters of the screen: a person who wants to sit quietly should
+/// be able to ignore "Write" and "Track" without reading the tiles underneath
+/// them, which is exactly what a single undifferentiated grid made impossible.
+///
+/// A section of two cards lays them out side by side; three or more falls into
+/// a two-column grid. Forcing two cards into a grid leaves a hole where the
+/// third would be, and a hole reads as something missing.
+class _NavSection extends StatelessWidget {
+  final String label;
+  final String tagline;
+  final Color accent;
+  final List<_NavCard> cards;
+
+  const _NavSection({
+    required this.label,
+    required this.tagline,
+    required this.accent,
+    required this.cards,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            // A short colour bar rather than an icon: it ties the heading to
+            // the tiles below without competing with their icons for attention.
+            Container(
+              width: 3,
+              height: 18,
+              decoration: BoxDecoration(
+                color: accent,
+                borderRadius: BorderRadius.circular(AppTheme.radiusPill),
+              ),
+            ),
+            const SizedBox(width: AppTheme.space3),
+            Text(
+              label,
+              style: const TextStyle(
+                fontFamily: 'Outfit',
+                fontSize: 19,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.2,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+            const SizedBox(width: AppTheme.space2 + 2),
+            Expanded(
+              child: Text(
+                tagline,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontFamily: 'Outfit',
+                  fontSize: 11.5,
+                  color: AppTheme.textMuted,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: AppTheme.space3),
+        if (cards.length == 2)
+          Row(
+            children: [
+              Expanded(child: AspectRatio(aspectRatio: 1.2, child: cards[0])),
+              const SizedBox(width: 12),
+              Expanded(child: AspectRatio(aspectRatio: 1.2, child: cards[1])),
+            ],
+          )
+        else
+          GridView.count(
+            crossAxisCount: 2,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            childAspectRatio: 1.2,
+            children: cards,
+          ),
+      ],
     );
   }
 }
@@ -814,5 +1194,501 @@ class _NavCard extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// The admin's half of the 🤖 sheet: every conversation, live from Firestore.
+///
+/// Deliberately not a link to the inbox and nothing else. The question an
+/// operator opens this for — *is anybody waiting on me right now* — should be
+/// answered by the sheet itself, in one glance, before they decide whether to
+/// go anywhere. Tapping a row opens that chat; the button at the bottom opens
+/// the full inbox with its verify / active / all tabs.
+class _AdminChatsPanel extends StatefulWidget {
+  final void Function(String route) onOpen;
+
+  const _AdminChatsPanel({required this.onOpen});
+
+  @override
+  State<_AdminChatsPanel> createState() => _AdminChatsPanelState();
+}
+
+class _AdminChatsPanelState extends State<_AdminChatsPanel> {
+  final _service = CounsellingService();
+
+  @override
+  void initState() {
+    super.initState();
+    // Ended sessions past their two hours are destroyed on the way in, from
+    // this side of the room as well as from the member's.
+    _service.purgeExpired(asAdmin: true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<CounsellingSession>>(
+      stream: _service.streamAll(),
+      builder: (context, snap) {
+        if (snap.hasError) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                'Could not load the sessions: ${snap.error}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontFamily: 'Outfit', fontSize: 13, color: Colors.redAccent),
+              ),
+            ),
+          );
+        }
+        if (!snap.hasData) {
+          return const Center(
+              child: CircularProgressIndicator(color: AppTheme.primary));
+        }
+
+        final all = snap.data!.where((s) => !s.isExpired).toList();
+        final toVerify = all
+            .where((s) => s.status == CounsellingStatus.paymentSubmitted)
+            .toList();
+        // Approved counts as live: the member has paid, is choosing their
+        // format, and could type at any second.
+        final live = all.where((s) => s.isLive).toList()
+          ..sort((a, b) => (b.lastMessageAt ?? b.createdAt)
+              .compareTo(a.lastMessageAt ?? a.createdAt));
+        final waitingToPay = all
+            .where((s) => s.status == CounsellingStatus.awaitingPayment)
+            .length;
+
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: _AdminChatStat(
+                    value: '${toVerify.length}',
+                    label: 'To verify',
+                    color: AppTheme.accent,
+                    urgent: toVerify.isNotEmpty,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _AdminChatStat(
+                    value: '${live.length}',
+                    label: 'Live chats',
+                    color: const Color(0xFF10B981),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _AdminChatStat(
+                    value: '$waitingToPay',
+                    label: 'Awaiting pay',
+                    color: AppTheme.textMuted,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+
+            if (toVerify.isNotEmpty) ...[
+              const Text(
+                'Payments to verify',
+                style: TextStyle(
+                    fontFamily: 'Outfit',
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.textPrimary),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Approve one and the chat goes live with that member.',
+                style: TextStyle(
+                    fontFamily: 'Outfit', fontSize: 11.5, color: AppTheme.textMuted),
+              ),
+              const SizedBox(height: 10),
+              ...toVerify.map((s) => _AdminChatRow(
+                    session: s,
+                    onTap: () => widget.onOpen('/counselling/inbox'),
+                  )),
+              const SizedBox(height: 18),
+            ],
+
+            const Text(
+              'Active chats',
+              style: TextStyle(
+                  fontFamily: 'Outfit',
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary),
+            ),
+            const SizedBox(height: 10),
+            if (live.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 18),
+                child: Text(
+                  'No live sessions right now. A chat becomes active the moment '
+                  'you approve a payment.',
+                  style: TextStyle(
+                      fontFamily: 'Outfit',
+                      fontSize: 12.5,
+                      height: 1.6,
+                      color: AppTheme.textMuted),
+                ),
+              )
+            else
+              ...live.map((s) => _AdminChatRow(
+                    session: s,
+                    onTap: () => widget.onOpen('/counselling/inbox'),
+                  )),
+
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => widget.onOpen('/counselling/inbox'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+                icon: const Icon(Icons.inbox_outlined, size: 18, color: Colors.white),
+                label: const Text(
+                  'Open the full inbox',
+                  style: TextStyle(
+                      fontFamily: 'Outfit',
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _AdminChatStat extends StatelessWidget {
+  final String value;
+  final String label;
+  final Color color;
+  final bool urgent;
+
+  const _AdminChatStat({
+    required this.value,
+    required this.label,
+    required this.color,
+    this.urgent = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: urgent ? 0.16 : 0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: urgent ? 0.55 : 0.25)),
+      ),
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: TextStyle(
+                fontFamily: 'Outfit',
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: color),
+          ),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+                fontFamily: 'Outfit', fontSize: 10.5, color: AppTheme.textSecondary),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AdminChatRow extends StatelessWidget {
+  final CounsellingSession session;
+  final VoidCallback onTap;
+
+  const _AdminChatRow({required this.session, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    // A dot only when the member spoke last: that is the difference between
+    // "there is a conversation" and "somebody is waiting on a reply".
+    final waitingOnMe = session.lastMessageBy == ChatSender.member;
+
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppTheme.bgCardLight,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: waitingOnMe
+                ? AppTheme.accent.withValues(alpha: 0.45)
+                : AppTheme.border,
+          ),
+        ),
+        child: Row(
+          children: [
+            if (waitingOnMe)
+              Container(
+                width: 7,
+                height: 7,
+                margin: const EdgeInsets.only(right: 9),
+                decoration: const BoxDecoration(
+                    color: AppTheme.accent, shape: BoxShape.circle),
+              ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    session.name.isEmpty ? 'Member' : session.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontFamily: 'Outfit',
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textPrimary),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    session.lastMessagePreview.isEmpty
+                        ? session.concern
+                        : session.lastMessagePreview,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontFamily: 'Outfit',
+                        fontSize: 11.5,
+                        color: AppTheme.textMuted),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: AppTheme.primary.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                session.status.label,
+                style: const TextStyle(
+                    fontFamily: 'Outfit',
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.primaryLight),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// "Yesterday is missing. Recover it?"
+///
+/// Silent unless there is genuinely one day to repair — which is most days, for
+/// most people, and that is the point. A permanent "recover your streak" button
+/// would turn a safety net into a feature people plan around; a card that only
+/// appears the morning after a slip is a safety net.
+///
+/// It also stays visible, greyed, when the gap exists but the monthly allowance
+/// has been spent. Saying "you used yours 11 days ago" is the honest version of
+/// hiding the button and letting them wonder whether the feature is broken.
+class _StreakRecoveryCard extends StatefulWidget {
+  const _StreakRecoveryCard();
+
+  @override
+  State<_StreakRecoveryCard> createState() => _StreakRecoveryCardState();
+}
+
+class _StreakRecoveryCardState extends State<_StreakRecoveryCard> {
+  final _service = StreakService();
+
+  StreakRecovery? _status;
+  bool _working = false;
+
+  /// The entry set the current [_status] was computed from. The provider
+  /// reloads whenever an entry is written, and re-checking on every rebuild
+  /// would be a Firestore read per frame.
+  int _checkedAgainst = -1;
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    final journal = context.watch<JournalProvider>();
+    final uid = auth.user?.uid;
+
+    if (uid == null || journal.loading) return const SizedBox.shrink();
+
+    final signature = Object.hash(journal.entries.length, journal.recoveredDays.length);
+    if (signature != _checkedAgainst) {
+      _checkedAgainst = signature;
+      _refresh(uid, journal.entryDates);
+    }
+
+    final status = _status;
+    if (status == null || status.missedDay == null) return const SizedBox.shrink();
+
+    final missed = status.missedDay!;
+    final available = status.hasAllowance;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF59E0B).withValues(alpha: available ? 0.10 : 0.05),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: const Color(0xFFF59E0B)
+                .withValues(alpha: available ? 0.40 : 0.18),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Text('🛟', style: TextStyle(fontSize: 18)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    available
+                        ? 'You missed ${_dayLabel(missed)}'
+                        : 'Recovery already used this month',
+                    style: const TextStyle(
+                      fontFamily: 'Outfit',
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              available
+                  ? 'One day, once a month — that is the whole allowance. Use it '
+                      'and your streak carries on as if the day had not been '
+                      'missed. Miss two days in a row and there is nothing to '
+                      'recover; that is a fresh start, not a failure.'
+                  : 'Your next recovery is available in '
+                      '${status.daysUntilAllowance} '
+                      '${status.daysUntilAllowance == 1 ? 'day' : 'days'}. '
+                      'Until then the honest way back is to write today.',
+              style: const TextStyle(
+                fontFamily: 'Outfit',
+                fontSize: 12.5,
+                height: 1.55,
+                color: AppTheme.textSecondary,
+              ),
+            ),
+            if (available) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _working ? null : () => _recover(uid, missed),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFF59E0B),
+                    foregroundColor: Colors.black,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  icon: _working
+                      ? const SizedBox(
+                          width: 15,
+                          height: 15,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.black54),
+                        )
+                      : const Icon(Icons.restore_rounded, size: 17),
+                  label: Text(
+                    _working ? 'Recovering…' : 'Recover my streak',
+                    style: const TextStyle(
+                        fontFamily: 'Outfit',
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _refresh(String uid, List<DateTime> entryDates) async {
+    final status = await _service.check(uid: uid, entryDates: entryDates);
+    if (mounted) setState(() => _status = status);
+  }
+
+  Future<void> _recover(String uid, DateTime day) async {
+    setState(() => _working = true);
+    try {
+      await _service.recover(uid: uid, day: day);
+      // Reload before reporting success: the number on the card behind this one
+      // has to have moved by the time the message is read, or the member is
+      // told it worked while looking at evidence that it did not.
+      if (mounted) await context.read<JournalProvider>().loadEntries(uid);
+      await ProfileService().syncProfileStats(uid);
+      if (!mounted) return;
+      setState(() {
+        _status = null;
+        _checkedAgainst = -1;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Streak recovered. Keep going. 🔥',
+              style: TextStyle(fontFamily: 'Outfit')),
+          backgroundColor: AppTheme.success,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not recover the streak just now. Please try again.',
+              style: TextStyle(fontFamily: 'Outfit')),
+          backgroundColor: AppTheme.danger,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
+  String _dayLabel(DateTime day) {
+    final gap = daysBetween(day, DateTime.now());
+    if (gap == 1) return 'yesterday';
+    if (gap == 2) return 'the day before yesterday';
+    return 'a day';
   }
 }

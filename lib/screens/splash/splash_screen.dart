@@ -197,7 +197,7 @@ class _SplashScreenState extends State<SplashScreen>
                   ),
                 ),
                 child: const Text(
-                  'Brahma Journal',
+                  'InnenFlow',
                   style: TextStyle(
                     fontFamily: 'Outfit',
                     fontSize: 32,

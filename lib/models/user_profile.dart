@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../core/constants/professions.dart';
 import '../core/utils/stats_utils.dart';
 
 class UserProfile {
@@ -19,6 +20,30 @@ class UserProfile {
   /// short catalogue key rather than a URL — see SpiritualAvatars.
   final String? avatarId;
 
+  /// What this member is trying to get good at — see Professions.
+  ///
+  /// Null until they choose. Everything downstream treats that as "not set up
+  /// yet" and shows an invitation rather than an empty chart, because a
+  /// consistency screen with no craft behind it is just a blank grid.
+  final String? profession;
+
+  /// Their own words for what they are working towards. Shown back to them at
+  /// the top of the consistency card, which is the entire point of asking.
+  final String? aim;
+
+  /// Days per week they are aiming to practise. Not seven by default — a
+  /// target broken in week one is worse than no target.
+  final int craftWeeklyTarget;
+
+  /// Checklist items this member wrote for themselves, on top of the presets
+  /// that came with their craft.
+  ///
+  /// The presets exist so nobody faces an empty list on day one; this exists
+  /// because no shipped list of six can describe what a particular person is
+  /// actually trying to do. Both kinds tick the same way and both land in
+  /// `craftDone`, so analytics never has to know the difference.
+  final List<CraftHabit> customHabits;
+
   UserProfile({
     required this.uid,
     this.name,
@@ -34,7 +59,17 @@ class UserProfile {
     this.totalJournalEntries = 0,
     this.lastActiveAt,
     this.avatarId,
+    this.profession,
+    this.aim,
+    this.craftWeeklyTarget = 5,
+    this.customHabits = const [],
   });
+
+  bool get hasCraft => profession != null && profession!.isNotEmpty;
+
+  /// Everything tickable today: craft presets plus the member's own items.
+  List<CraftHabit> get checklist =>
+      Professions.checklistFor(profession, customHabits);
 
   static DateTime? _parseDateTime(dynamic value) {
     if (value == null) return null;
@@ -65,7 +100,25 @@ class UserProfile {
       totalJournalEntries: _parseInt(data['totalJournalEntries']),
       lastActiveAt: _parseDateTime(data['lastActiveAt']),
       avatarId: data['avatarId'],
+      profession: data['profession'],
+      aim: data['aim'],
+      craftWeeklyTarget: data['craftWeeklyTarget'] is num
+          ? (data['craftWeeklyTarget'] as num).toInt()
+          : 5,
+      customHabits: _parseHabits(data['customHabits']),
     );
+  }
+
+  /// Anything malformed is dropped rather than thrown on. A single bad entry
+  /// must not take the whole profile down with it — that would sign the member
+  /// out of their own dashboard over one field.
+  static List<CraftHabit> _parseHabits(dynamic value) {
+    if (value is! List) return const [];
+    return value
+        .whereType<Map>()
+        .map((m) => CraftHabit.fromMap(Map<String, dynamic>.from(m)))
+        .where((h) => h.id.isNotEmpty && h.label.isNotEmpty)
+        .toList();
   }
 
   /// Older documents wrote these counters as strings/doubles; a plain cast
@@ -91,6 +144,10 @@ class UserProfile {
       if (age != null) 'age': age,
       if (gender != null) 'gender': gender,
       if (phone != null) 'phone': phone,
+      if (profession != null) 'profession': profession,
+      if (aim != null) 'aim': aim,
+      'craftWeeklyTarget': craftWeeklyTarget,
+      'customHabits': customHabits.map((h) => h.toMap()).toList(),
     };
   }
 
@@ -98,7 +155,8 @@ class UserProfile {
     String? name, String? email, int? age, String? gender, String? phone,
     int? streak, int? longestStreak, int? totalMeditationSeconds,
     int? totalJournalEntries, DateTime? lastActiveAt,
-    String? avatarId,
+    String? avatarId, String? profession, String? aim, int? craftWeeklyTarget,
+    List<CraftHabit>? customHabits,
   }) {
     return UserProfile(
       uid: uid,
@@ -115,6 +173,10 @@ class UserProfile {
       totalJournalEntries: totalJournalEntries ?? this.totalJournalEntries,
       lastActiveAt: lastActiveAt ?? this.lastActiveAt,
       avatarId: avatarId ?? this.avatarId,
+      profession: profession ?? this.profession,
+      aim: aim ?? this.aim,
+      craftWeeklyTarget: craftWeeklyTarget ?? this.craftWeeklyTarget,
+      customHabits: customHabits ?? this.customHabits,
     );
   }
 
@@ -139,7 +201,7 @@ class UserProfile {
     return daysBetween(d, DateTime.now()) <= 1 ? streak : 0;
   }
 
-  String get displayName => name ?? email?.split('@').first ?? 'Soul';
+  String get displayName => name ?? email?.split('@').first ?? 'Friend';
   String get initials {
     if (name != null && name!.isNotEmpty) {
       final parts = name!.split(' ');

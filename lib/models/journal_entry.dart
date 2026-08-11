@@ -28,6 +28,18 @@ class JournalEntry {
   /// can be added or rotated without a schema change.
   final Map<String, String> checkIn;
 
+  /// What the member did today towards their own craft — habit ids from their
+  /// chosen profession. See Professions.
+  ///
+  /// This is the field that lets analytics answer "am I actually doing the
+  /// work", which mood and meditation minutes cannot. Stored as ids rather
+  /// than labels so a wording change does not orphan a year of history.
+  final List<String> craftDone;
+
+  /// Minutes spent, when they bothered to say. Zero means "did not record",
+  /// not "did nothing" — the habit ids are the record of that.
+  final int craftMinutes;
+
   final DateTime createdAt;
   final DateTime? updatedAt;
 
@@ -52,6 +64,8 @@ class JournalEntry {
     this.habitsDone = const [],
     this.challenges = const [],
     this.checkIn = const {},
+    this.craftDone = const [],
+    this.craftMinutes = 0,
     required this.createdAt,
     this.updatedAt,
   });
@@ -115,6 +129,9 @@ class JournalEntry {
       habitsDone: List<String>.from(data['habitsDone'] ?? const []),
       challenges: List<String>.from(data['challenges'] ?? const []),
       checkIn: Map<String, String>.from(data['checkIn'] ?? const {}),
+      craftDone: List<String>.from(data['craftDone'] ?? const []),
+      craftMinutes:
+          data['craftMinutes'] is num ? (data['craftMinutes'] as num).toInt() : 0,
       // clientCreatedAt covers the window where the server stamp is still
       // pending — without it a fresh entry falls back to "now", which is right
       // by luck today and wrong for anything written offline yesterday.
@@ -146,8 +163,14 @@ class JournalEntry {
       'habitsDone': habitsDone,
       'challenges': challenges,
       'checkIn': checkIn,
+      'craftDone': craftDone,
+      'craftMinutes': craftMinutes,
     };
   }
+
+  /// True when this day counts towards craft consistency — any recorded habit,
+  /// or recorded minutes without the habit taps.
+  bool get didCraft => craftDone.isNotEmpty || craftMinutes > 0;
 
   JournalEntry copyWith({
     String? id, String? uid, int? mood, String? newHabit, String? tinyStep,

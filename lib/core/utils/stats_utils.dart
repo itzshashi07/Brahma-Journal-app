@@ -49,6 +49,40 @@ int streakFromDates(Iterable<DateTime> dates) {
   return streak;
 }
 
+/// The single missed day a streak recovery would repair, or null when there is
+/// nothing recoverable.
+///
+/// "Recoverable" is deliberately narrow, and the two conditions are the whole
+/// feature:
+///
+///   1. **The gap is exactly one day wide.** The day before the missed day must
+///      itself be active — otherwise filling one day joins nothing to anything
+///      and the member is buying back a streak they did not have. Two missed
+///      days in a row is a broken streak, and this returns null for it.
+///   2. **Filling it revives the streak.** A gap further back than the day
+///      before yesterday means today *and* yesterday are both empty, so the
+///      streak is already gone for a reason the recovery does not address.
+///
+/// Today is never the answer, even when nothing has been written yet: the day
+/// is not over, and it can still be filled by actually journalling — which is
+/// the thing this whole app exists to encourage.
+DateTime? recoverableGapDay(Iterable<DateTime> dates) {
+  final today = todayMarker();
+  final active = dates.map(dayMarker).where((d) => !d.isAfter(today)).toSet();
+  if (active.isEmpty) return null;
+
+  // Walk back from yesterday to the most recent day with nothing on it.
+  var missed = today.subtract(const Duration(days: 1));
+  while (active.contains(missed)) {
+    missed = missed.subtract(const Duration(days: 1));
+  }
+
+  if (!active.contains(missed.subtract(const Duration(days: 1)))) return null;
+  if (daysBetween(missed, today) > 2) return null;
+
+  return missed;
+}
+
 /// The longest run of consecutive active days anywhere in the history.
 ///
 /// Backs the badges: an achievement shouldn't disappear the day someone misses

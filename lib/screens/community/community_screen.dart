@@ -10,7 +10,9 @@ import '../../widgets/profile_avatar.dart';
 import '../../widgets/streak_progress.dart';
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
+import '../../services/blog_service.dart';
 import '../../services/community_service.dart';
+import '../../services/follow_service.dart';
 
 class CommunityScreen extends StatefulWidget {
   const CommunityScreen({super.key});
@@ -21,11 +23,28 @@ class CommunityScreen extends StatefulWidget {
 
 class _CommunityScreenState extends State<CommunityScreen> {
   final ProfileService _profileService = ProfileService();
+  final FollowService _followService = FollowService();
   List<_CommunityMember> _members = [];
   bool _isLoading = true;
   String? _error;
   String? _currentUid;
   bool _rebuilding = false;
+
+  /// Who the signed-in member follows. Held on this screen and never sent
+  /// anywhere: it is read from a path only they can read, and it drives nothing
+  /// but the state of their own buttons.
+  Set<String> _following = {};
+
+  /// Public follower counts, keyed by uid.
+  Map<String, int> _followerCounts = {};
+
+  /// Published articles per author, keyed by uid. Counted from /blogs rather
+  /// than stored on the profile, so it can never drift from what is actually
+  /// in the Sanctuary.
+  Map<String, int> _articleCounts = {};
+
+  /// Rows with a follow write in flight, so a double tap cannot send two.
+  final Set<String> _followBusy = {};
 
   @override
   void initState() {
@@ -55,9 +74,19 @@ class _CommunityScreenState extends State<CommunityScreen> {
       final profiles = await _profileService.getLeaderboard();
       final members = profiles.map(_toMember).toList()..sort(_byStreak);
 
+      // Both follow reads are best-effort inside the service — a project still
+      // running the previous rules refuses them, and a leaderboard without
+      // follow buttons is far better than no leaderboard.
+      final following = await _followService.myFollowing();
+      final counts = await _followService.followerCounts();
+      final articles = await BlogService().publishedCountsByAuthor();
+
       if (!mounted) return;
       setState(() {
         _members = members;
+        _following = following;
+        _followerCounts = counts;
+        _articleCounts = articles;
         _isLoading = false;
       });
     } catch (e) {
@@ -101,6 +130,59 @@ class _CommunityScreenState extends State<CommunityScreen> {
 
   int get _topStreak => _members.isEmpty ? 0 : _members.first.streak;
   int get _activeToday => _members.where((m) => m.isActiveToday).length;
+
+  /// Follows or unfollows, optimistically.
+  ///
+  /// The button and the count both move before the write lands, because a
+  /// follow that takes a visible moment to register reads as a broken button
+  /// and gets tapped again. If the write fails, both are put back exactly as
+  /// they were and the failure is said out loud — silently reverting is worse
+  /// than either outcome.
+  Future<void> _toggleFollow(_CommunityMember member) async {
+    final uid = member.profile.uid;
+    if (uid == _currentUid || _followBusy.contains(uid)) return;
+
+    final wasFollowing = _following.contains(uid);
+    final previousCount = _followerCounts[uid] ?? 0;
+
+    setState(() {
+      _followBusy.add(uid);
+      if (wasFollowing) {
+        _following.remove(uid);
+        _followerCounts[uid] = previousCount > 0 ? previousCount - 1 : 0;
+      } else {
+        _following.add(uid);
+        _followerCounts[uid] = previousCount + 1;
+      }
+    });
+
+    try {
+      await _followService.toggle(uid, currentlyFollowing: wasFollowing);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        if (wasFollowing) {
+          _following.add(uid);
+        } else {
+          _following.remove(uid);
+        }
+        _followerCounts[uid] = previousCount;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            wasFollowing
+                ? 'Could not unfollow just now. Please try again.'
+                : 'Could not follow just now. Please try again.',
+            style: const TextStyle(fontFamily: 'Outfit'),
+          ),
+          backgroundColor: AppTheme.danger,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _followBusy.remove(uid));
+    }
+  }
 
   /// Admin-only: repopulate the board from every member's profile.
   ///
@@ -152,7 +234,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
     final topMember = _members.first;
     final topStreak = topMember.streak;
 
-    final content = '🏆 *Spiritual Leaderboard Celebration!* 🌟\n'
+    final content = '🏆 *Streak Leaderboard!* 🌟\n'
         '- Top Streak seeker: ${topMember.profile.displayName} with $topStreak days! 🔥\n'
         '- Seekers practising today: $_activeToday of ${_members.length} 🙏\n'
         '- Keep logging your reflections and finding quiet moments. We are in this together! ✨';
@@ -239,6 +321,11 @@ class _CommunityScreenState extends State<CommunityScreen> {
             member: m,
             rank: i + 1,
             isCurrentUser: m.profile.uid == _currentUid,
+            followers: _followerCounts[m.profile.uid] ?? 0,
+            articles: _articleCounts[m.profile.uid] ?? 0,
+            isFollowing: _following.contains(m.profile.uid),
+            followBusy: _followBusy.contains(m.profile.uid),
+            onToggleFollow: () => _toggleFollow(m),
           );
         },
       ),
@@ -322,6 +409,24 @@ class _CommunityScreenState extends State<CommunityScreen> {
                   ],
                 ),
               ),
+              // Said plainly, because the asymmetry is the point and nobody
+              // would assume it: a follow here is not an announcement.
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Row(
+                  children: [
+                    Icon(Icons.lock_outline_rounded, size: 11, color: AppTheme.textMuted),
+                    SizedBox(width: 5),
+                    Expanded(
+                      child: Text(
+                        'Follower counts are public. Who follows whom is private — '
+                        'not even they can see it.',
+                        style: TextStyle(fontFamily: 'Outfit', fontSize: 10.5, height: 1.4, color: AppTheme.textMuted),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               const SizedBox(height: 12),
 
               Expanded(child: _buildBody()),
@@ -401,6 +506,75 @@ class _CommunityMessage extends StatelessWidget {
   }
 }
 
+/// Follow / Following, as a pill.
+///
+/// The two states are deliberately different weights rather than the same
+/// button with different words: "Following" is a state you are already in and
+/// should recede, "Follow" is an action and should not.
+class _FollowButton extends StatelessWidget {
+  final bool isFollowing;
+  final bool busy;
+  final VoidCallback onTap;
+
+  const _FollowButton({
+    required this.isFollowing,
+    required this.busy,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: busy ? null : onTap,
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: isFollowing
+              ? Colors.transparent
+              : AppTheme.primary.withValues(alpha: 0.9),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: isFollowing
+                ? AppTheme.border
+                : AppTheme.primary.withValues(alpha: 0.9),
+          ),
+        ),
+        child: busy
+            ? const SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                    strokeWidth: 1.6, color: AppTheme.textSecondary),
+              )
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    isFollowing
+                        ? Icons.check_rounded
+                        : Icons.person_add_alt_1_rounded,
+                    size: 12,
+                    color: isFollowing ? AppTheme.textMuted : Colors.white,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    isFollowing ? 'Following' : 'Follow',
+                    style: TextStyle(
+                      fontFamily: 'Outfit',
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: isFollowing ? AppTheme.textMuted : Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+}
+
 class _HeaderStat extends StatelessWidget {
   final String value;
   final String label;
@@ -422,7 +596,30 @@ class _MemberCard extends StatelessWidget {
   final int rank;
   final bool isCurrentUser;
 
-  const _MemberCard({required this.member, required this.rank, this.isCurrentUser = false});
+  /// Public. The one number about following that anybody else gets to see.
+  final int followers;
+
+  /// Published articles. Approved ones only — a queued draft is not a
+  /// contribution to the community yet.
+  final int articles;
+
+  /// Whether *you* follow them. Read from a path only you can read, so this is
+  /// never true on anybody else's device.
+  final bool isFollowing;
+
+  final bool followBusy;
+  final VoidCallback onToggleFollow;
+
+  const _MemberCard({
+    required this.member,
+    required this.rank,
+    this.isCurrentUser = false,
+    this.followers = 0,
+    this.articles = 0,
+    this.isFollowing = false,
+    this.followBusy = false,
+    required this.onToggleFollow,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -534,6 +731,28 @@ class _MemberCard extends StatelessWidget {
                       '${member.totalJournalEntries}',
                       style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 11),
                     ),
+                    const SizedBox(width: 10),
+                    // The count is public; the names behind it are not, and
+                    // there is nothing to tap through to for that reason.
+                    const Icon(Icons.people_alt_outlined, size: 12, color: Color(0xFF7C3AED)),
+                    const SizedBox(width: 4),
+                    Text(
+                      '$followers',
+                      style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 11),
+                    ),
+                    // Only shown by people who have actually published — a "0
+                    // articles" on every row makes writing look like a chore
+                    // everyone is failing at rather than something some people
+                    // do.
+                    if (articles > 0) ...[
+                      const SizedBox(width: 10),
+                      const Icon(Icons.article_outlined, size: 12, color: Color(0xFFEC4899)),
+                      const SizedBox(width: 4),
+                      Text(
+                        '$articles',
+                        style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 11),
+                      ),
+                    ],
                   ],
                 ),
                 if (member.badges.isNotEmpty) ...[
@@ -572,6 +791,14 @@ class _MemberCard extends StatelessWidget {
                 ],
               ),
               const Text('day streak', style: TextStyle(fontFamily: 'Outfit', fontSize: 11, color: AppTheme.textMuted)),
+              if (!isCurrentUser) ...[
+                const SizedBox(height: 8),
+                _FollowButton(
+                  isFollowing: isFollowing,
+                  busy: followBusy,
+                  onTap: onToggleFollow,
+                ),
+              ],
             ],
           ),
         ],

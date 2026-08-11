@@ -39,7 +39,7 @@ class StreakTier {
 class StreakTiers {
   static const silver = StreakTier(
     id: 'silver',
-    label: 'Silver Seeker',
+    label: 'Silver Streak',
     emoji: '🥈',
     minDays: 1,
     maxDays: 20,
@@ -49,7 +49,7 @@ class StreakTiers {
 
   static const gold = StreakTier(
     id: 'gold',
-    label: 'Golden Soul',
+    label: 'Golden Month',
     emoji: '🥇',
     minDays: 21,
     maxDays: 74,
@@ -59,7 +59,7 @@ class StreakTiers {
 
   static const platinum = StreakTier(
     id: 'platinum',
-    label: 'Platinum Sage',
+    label: 'Platinum Habit',
     emoji: '💎',
     minDays: 75,
     maxDays: 364,
@@ -79,7 +79,7 @@ class StreakTiers {
 
   static const eternal = StreakTier(
     id: 'eternal',
-    label: 'Eternal Flame',
+    label: 'Unbroken',
     emoji: '🔱',
     minDays: 1095,
     gradient: [Color(0xFFF0ABFC), Color(0xFF9333EA)],

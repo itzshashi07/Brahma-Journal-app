@@ -1,22 +1,34 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
+
 class AppConstants {
   // App Info
-  static const String appName = 'Brahma Journal';
-  static const String appTagline = 'Your Spiritual Wellness Companion';
+  static const String appName = 'InnenFlow';
+  static const String appTagline = 'A quieter place to think';
 
-  // Spiritual Names for Anonymous Thoughts (same as website)
-  static const List<String> spiritualNames = [
-    'Serene Seeker', 'Peaceful Soul', 'Mindful Heart', 'Gentle Spirit',
-    'Wise Wanderer', 'Calm Observer', 'Kind Heart', 'Thoughtful Mind',
-    'Pure Essence', 'Silent Sage', 'Loving Light', 'Quiet Strength',
-    'Inner Peace', 'Sacred Journey', 'Divine Spark', 'Eternal Flame',
-    'Mystic Soul', 'Radiant Being', 'Blessed Path', 'Cosmic Dreamer',
-    'Spiritual Guide', 'Awakened One', 'Enlightened Heart', 'Tranquil Mind',
-    'Sacred Breath', 'Universal Love', 'Infinite Grace', 'Celestial Voice',
-    'Holy Presence', 'Divine Light',
+  /// Display names for the anonymous board.
+  ///
+  /// Rewritten to carry no religious signal. The previous set — Divine Spark,
+  /// Holy Presence, Sacred Breath, Enlightened Heart — read as belonging to one
+  /// tradition, and the point of this app is that it should not. Somebody
+  /// Muslim, Christian, or of no faith at all was being handed a name from
+  /// somebody else's vocabulary at the exact moment they were trying to say
+  /// something honest.
+  ///
+  /// What replaces them describes a *manner*, not a belief: quiet, steady,
+  /// careful. Anyone can be told they are a "Steady Hand" and recognise it.
+  static const List<String> anonymousNames = [
+    'Quiet Voice', 'Steady Hand', 'Night Thinker', 'Open Window',
+    'Slow Reader', 'Kind Stranger', 'Second Thought', 'Long Walk',
+    'Early Riser', 'Small Fire', 'Blue Hour', 'Calm Observer',
+    'Deep Breath', 'Still Water', 'Soft Landing', 'Clear Sky',
+    'Distant Light', 'Patient Sort', 'Warm Coat', 'Low Tide',
+    'First Light', 'Anonymous Friend', 'Someone Nearby', 'Quiet Room',
+    'Held Together', 'Halfway There', 'Honest Note', 'Gentle Answer',
+    'Long Way Round', 'Sitting With It',
   ];
 
-  // Spiritual Colors
-  static const List<String> spiritualColors = [
+  // Colours paired with the names above.
+  static const List<String> anonymousColors = [
     '#8B5CF6', '#06B6D4', '#10B981', '#F59E0B', '#EF4444',
     '#EC4899', '#6366F1', '#84CC16', '#F97316', '#14B8A6',
     '#8B5A2B', '#7C3AED', '#059669', '#DC2626', '#7C2D12',
@@ -25,22 +37,29 @@ class AppConstants {
   // Meditation Durations
   static const List<int> meditationDurations = [5, 10, 20, 30];
 
-  // Thoughts of the Day (same as website)
+  // Thoughts of the Day
   static const List<String> thoughtsOfDay = [
     'Peace is not the absence of conflict, but the ability to cope with it through inner strength.',
     'Every moment is a fresh beginning. Use it to create something beautiful.',
-    'The soul\'s natural state is one of peace, love, and happiness.',
+    'Calm is not something you find. It is something you return to.',
     'When you change your thoughts, you change your world.',
     'Meditation is not about stopping thoughts, but recognizing that you are more than your thoughts.',
   ];
 
-  // Mantras (same as website)
-  static const List<String> mantras = [
-    'Om Shanti... Om Shanti... Om Shanti...',
-    'I am a peaceful soul...',
-    'I am love, I am light...',
-    'Breathe in peace, breathe out love...',
-    'I am connected to the divine source...',
+  /// Lines to rest attention on during a sitting.
+  ///
+  /// These were mantras from one tradition — "Om Shanti", "I am connected to
+  /// the divine source". A phrase you repeat for ten minutes is not neutral
+  /// furniture: it is the actual content of the practice, and handing somebody
+  /// a devotional line from a faith that is not theirs makes the whole feature
+  /// unusable for them. What is here now is the same mechanism — a short phrase
+  /// paced to the breath — with nothing to opt into.
+  static const List<String> groundingLines = [
+    'Breathing in, I am here. Breathing out, I am here.',
+    'This moment is enough.',
+    'Let the shoulders drop.',
+    'Breathe in slowly, let it go slowly.',
+    'Nothing to fix right now.',
   ];
 
   // Default Affirmations (same as website)
@@ -66,15 +85,15 @@ class AppConstants {
     {'value': 5, 'emoji': '😊', 'label': 'Very Happy'},
   ];
 
-  // Dummy Chatbot Responses
+  // Placeholder coach responses.
   static const List<String> chatbotResponses = [
-    '🙏 That is a beautiful reflection. Remember, the soul is always at peace beneath the surface of life\'s storms.',
-    '✨ Your awareness is growing. Every question you ask is a step closer to your higher self.',
-    '💜 In Brahma Kumaris wisdom, we say: "The original nature of the self is peace." Trust in this truth.',
-    '🌟 Take a deep breath. The answers you seek are already within you.',
-    '🕉️ Every challenge is an invitation for your soul to shine brighter. You have the inner strength to transform this.',
+    '🙏 That is worth sitting with. Underneath a hard day there is usually a steadier version of you still there.',
+    '✨ Your awareness is growing. Every question you ask is a step closer to understanding yourself.',
+    '💜 Whatever you are feeling right now is allowed to be here. It does not have to be justified first.',
+    '🌟 Take a deep breath. The answers you seek are often already within you.',
+    '🌿 A hard moment is not a verdict on you. You have got through every one of them so far.',
     '🌸 Practice self-compassion today. You are doing better than you think.',
-    '☀️ Start each day by remembering: I am a peaceful soul. This simple thought can transform your day.',
+    '☀️ Start each day by remembering: calm is your baseline, not your reward.',
     '🌙 Rest in the awareness that you are much more than your thoughts and circumstances.',
   ];
 
@@ -83,6 +102,9 @@ class AppConstants {
   static const String profilesCollection = 'profiles';
   static const String anonymousThoughtsCollection = 'anonymous_thoughts';
   static const String meditationSessionsCollection = 'meditation_sessions';
+  /// Attention games. Separate from meditation so the meditation minutes stay
+  /// an honest number.
+  static const String focusSessionsCollection = 'focus_sessions';
   static const String affirmationProgressCollection = 'affirmation_progress';
   static const String affirmationSessionsCollection = 'affirmation_sessions';
   static const String userAffirmationsCollection = 'user_affirmations';
@@ -105,17 +127,42 @@ class AppConstants {
   /// the Spark plan.
   static const bool paymentsEnabled = false;
 
-  /// Everything is free for everyone until this moment.
+  /// Whether everything is currently free for everyone.
   ///
-  /// Three months from the 7 August 2026 launch. Stored as UTC so a device in
-  /// another timezone counts down to the same instant. To extend the window,
-  /// change this date and ship a build — or set `freeUntil` (an ISO-8601
-  /// string) on the `app_config/access` document, which takes precedence and
-  /// needs no release.
-  static final DateTime freeAccessUntil = DateTime.utc(2026, 11, 7, 23, 59, 59);
+  /// Deliberately the plain inverse of [paymentsEnabled] and nothing else.
+  ///
+  /// This used to be `DateTime.now().isBefore(freeAccessUntil)` against a
+  /// hardcoded 7 November 2026. That is a trap: the app would begin telling
+  /// people their access was running out — and eventually begin charging —
+  /// on a date set months earlier by someone who would not be thinking about
+  /// it when it arrived. A deadline that fires on its own is a deadline nobody
+  /// decided to fire.
+  ///
+  /// Free access now ends when a human flips [paymentsEnabled] back to true
+  /// and ships a build. There is no clock, and nothing counts down.
+  static bool get isFreeAccessActive => !paymentsEnabled;
 
-  /// Whether the free window is still open.
-  static bool get isFreeAccessActive => DateTime.now().toUtc().isBefore(freeAccessUntil);
+  /// Whether the app may be screenshotted and screen-recorded.
+  ///
+  /// Tied to the build mode rather than to a hand-flipped constant, and that is
+  /// the point: **a release build is always protected**, so journal entries,
+  /// check-ins, anonymous thoughts, counselling transcripts and the book reader
+  /// cannot be left exposed by forgetting to change something back.
+  ///
+  /// Debug builds are capturable, which is what makes store screenshots and a
+  /// walkthrough recording possible — with protection on, a screen recording
+  /// comes out black and the app switcher shows a blank card. Debug builds are
+  /// never distributed; App Distribution and the Play Store both get release
+  /// builds.
+  ///
+  /// The same rule is expressed natively as well, because the native side runs
+  /// before any Dart does — protection is applied in `onCreate` /
+  /// `didFinishLaunching`, precisely so no frame can be captured in the gap:
+  ///
+  ///   * `MainActivity.ALLOW_SCREEN_CAPTURE` in
+  ///     android/app/src/main/kotlin/com/brahma/brahmaApp/MainActivity.kt
+  ///   * `ScreenSecurity.allowScreenCapture` in ios/Runner/AppDelegate.swift
+  static const bool allowScreenCapture = kDebugMode;
 
   // Firestore collections owned by the server
   static const String leaderboardCollection = 'leaderboard';
@@ -139,6 +186,20 @@ class AppConstants {
   /// After running the bootstrap script, delete this constant and the matching
   /// `isConfiguredAdminEmail()` branch in firestore.rules.
   static const String adminEmail = 'officialshashi2023@gmail.com';
+
+  // ─────────────────────── community channels ────────────────────────
+  //
+  // Public invite links, not secrets: they are meant to be handed out, and
+  // they are what turns a reader into someone who comes back.
+
+  /// WhatsApp group where updates are posted.
+  static const String communityWhatsAppUrl =
+      'https://chat.whatsapp.com/CSSPtnLv7q15UWuHgRD8ol';
+
+  static const String instagramUrl =
+      'https://www.instagram.com/____shashii_o7/';
+
+  static const String instagramHandle = '@____shashii_o7';
 
   // NOTE — deliberately no secrets here.
   //

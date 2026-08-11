@@ -30,7 +30,7 @@ import 'package:http/http.dart' as http;
 /// so a determined user could find and call it. That is deliberate and bounded
 /// — the endpoint can only deliver a support message to the operator, so the
 /// worst case is spam in one inbox. Compare that with the Resend key, which
-/// would let the same person send mail as Brahma Journal to every user. Add
+/// would let the same person send mail as InnenFlow to every user. Add
 /// rate limiting at the provider if it is ever abused.
 class SupportRelay {
   static Future<Map<String, dynamic>?> _config() async {
@@ -72,8 +72,8 @@ class SupportRelay {
     final body = provider == 'web3forms'
         ? {
             'access_key': config['accessKey'] ?? '',
-            'subject': 'Brahma Journal — $category',
-            'from_name': name.isEmpty ? 'Seeker' : name,
+            'subject': 'InnenFlow — $category',
+            'from_name': name.isEmpty ? 'Friend' : name,
             'email': email,
             'message': message,
           }

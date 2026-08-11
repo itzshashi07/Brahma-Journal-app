@@ -93,7 +93,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                 _staggered(
                   index: 1,
                   child: const Text(
-                    'Brahma Journal',
+                    'InnenFlow',
                     style: TextStyle(
                       fontFamily: 'Outfit',
                       fontSize: 34,
@@ -152,10 +152,14 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                   ),
                 ),
                 const SizedBox(height: AppTheme.space6),
+                // Was 'ॐ शान्तिः'. The last line on the screen somebody sees
+                // before deciding whether to sign up should not ask them to
+                // recognise a mantra from one tradition — that is the single
+                // most exclusionary place in the app to put one.
                 _staggered(
                   index: 6,
                   child: const Text(
-                    'ॐ शान्तिः',
+                    'be still · be here',
                     style: TextStyle(
                       fontFamily: 'Outfit',
                       fontSize: 13,

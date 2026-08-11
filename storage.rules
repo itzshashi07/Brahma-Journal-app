@@ -47,6 +47,39 @@ service firebase.storage {
       allow write, delete: if isAdmin();
     }
 
+    // Voice notes from a counselling session.
+    //
+    // These are recordings of a real person describing a mental health problem,
+    // so they are the most sensitive objects this bucket will ever hold. Two
+    // consequences:
+    //
+    //   • Storage rules cannot read Firestore, so this path cannot verify that
+    //     the caller owns the session the way firestore.rules does. It is
+    //     therefore restricted to signed-in users, and secrecy rests on the
+    //     session id — a Firestore auto-id, 20 characters of unguessable
+    //     entropy — never being readable by anyone outside the conversation.
+    //     firestore.rules is what enforces that: the session document and its
+    //     messages, which are the only places the id and the download URL
+    //     appear, are owner-and-admin only.
+    //
+    //   • Delete has to stay open to any signed-in caller for the same reason:
+    //     the two-hour purge runs on the client, from the member's device as
+    //     well as the operator's, and it must be able to destroy the audio it
+    //     can no longer identify an owner for. An attacker who somehow held a
+    //     session id could delete a recording — which is the failure direction
+    //     to prefer over one where they could read it.
+    match /counselling/{sessionId}/{fileName} {
+      allow read: if isSignedIn();
+
+      allow write: if isSignedIn()
+                   // 25 MB covers the three-minute cap the recorder enforces,
+                   // at the AAC bitrate it records with, several times over.
+                   && request.resource.size < 25 * 1024 * 1024
+                   && request.resource.contentType.matches('audio/.*');
+
+      allow delete: if isSignedIn();
+    }
+
     // Anything not matched above is denied.
     match /{allPaths=**} {
       allow read, write: if false;

@@ -5,11 +5,14 @@ import '../models/app_release.dart';
 import '../services/app_update_service.dart';
 import 'sacred.dart';
 
-/// Update prompt with an inline download.
+/// Update prompt.
 ///
-/// One surface for the whole flow — details, progress, errors — rather than a
-/// dialog that dismisses into a browser and leaves the user to work out what
-/// happens next.
+/// Shows what is in the new version and sends the user to the store to get it.
+///
+/// It used to download and install the APK inline, with a progress bar and an
+/// install-permission prompt. All of that is gone: Play does not allow an app
+/// to update itself, so the honest version of this dialog is one that hands off
+/// to the store. See [AppUpdateService] for the policy.
 ///
 /// A mandatory update cannot be escaped: no Later, no barrier dismiss, and back
 /// is intercepted.
@@ -31,79 +34,18 @@ class UpdateDialog extends StatefulWidget {
 }
 
 class _UpdateDialogState extends State<UpdateDialog> {
-  final _cancelToken = CancelToken();
-
-  bool _downloading = false;
-  double? _progress;
-  int _received = 0;
-  int? _total;
-  String? _error;
-  bool _needsPermission = false;
-
-  @override
-  void dispose() {
-    _cancelToken.cancel();
-    super.dispose();
-  }
+  /// True once the store has been opened, so the button can say something
+  /// truthful if the user comes back without having updated.
+  bool _sentToStore = false;
 
   Future<void> _start() async {
-    final release = widget.release;
-
-    // Not a direct APK — an App Distribution or Play page has to open in the
-    // browser, because downloading it would just fetch HTML.
-    if (!release.isDirectApk) {
-      await AppUpdateService.openDownloadPage(release);
-      if (mounted && !release.mandatory) Navigator.pop(context);
-      return;
-    }
-
-    setState(() {
-      _downloading = true;
-      _error = null;
-      _needsPermission = false;
-      _progress = null;
-      _received = 0;
-    });
-
-    final failure = await AppUpdateService.downloadAndInstall(
-      release,
-      cancelToken: _cancelToken,
-      onProgress: (p, received, total) {
-        if (!mounted) return;
-        setState(() {
-          _progress = p;
-          _received = received;
-          _total = total;
-        });
-      },
-    );
-
+    await AppUpdateService.openStoreListing(widget.release);
     if (!mounted) return;
+    setState(() => _sentToStore = true);
 
-    if (failure == 'needs-permission') {
-      setState(() {
-        _downloading = false;
-        _needsPermission = true;
-      });
-      return;
-    }
-
-    setState(() {
-      _downloading = false;
-      _error = failure;
-    });
-
-    // Success hands off to the system installer; leave the dialog up so the
-    // user has somewhere to land if they cancel that.
-  }
-
-  String get _progressLabel {
-    if (_total != null && _total! > 0) {
-      final mb = (_received / (1024 * 1024)).toStringAsFixed(1);
-      final totalMb = (_total! / (1024 * 1024)).toStringAsFixed(1);
-      return '$mb MB of $totalMb MB';
-    }
-    return '${(_received / (1024 * 1024)).toStringAsFixed(1)} MB downloaded';
+    // An optional update closes behind them; a mandatory one stays, because
+    // coming back without updating must not leave them inside the app.
+    if (!widget.release.mandatory) Navigator.pop(context);
   }
 
   @override
@@ -111,7 +53,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
     final r = widget.release;
 
     return PopScope(
-      canPop: !r.mandatory && !_downloading,
+      canPop: !r.mandatory,
       child: Dialog(
         backgroundColor: Colors.transparent,
         insetPadding: const EdgeInsets.all(AppTheme.space5),
@@ -213,61 +155,12 @@ class _UpdateDialogState extends State<UpdateDialog> {
                 ),
               ],
 
-              if (_downloading) ...[
-                const SizedBox(height: AppTheme.space5),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(AppTheme.radiusPill),
-                  child: LinearProgressIndicator(
-                    value: _progress,
-                    minHeight: 6,
-                    backgroundColor: Colors.white.withValues(alpha: 0.08),
-                    valueColor:
-                        const AlwaysStoppedAnimation<Color>(AppTheme.primary),
-                  ),
-                ),
-                const SizedBox(height: AppTheme.space2),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      _progressLabel,
-                      style: const TextStyle(
-                          fontFamily: 'Outfit',
-                          fontSize: 11.5,
-                          color: AppTheme.textMuted),
-                    ),
-                    if (_progress != null)
-                      Text(
-                        '${(_progress! * 100).toStringAsFixed(0)}%',
-                        style: const TextStyle(
-                            fontFamily: 'Outfit',
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w600,
-                            color: AppTheme.primaryLight),
-                      ),
-                  ],
-                ),
-              ],
-
-              if (_needsPermission) ...[
+              if (_sentToStore && r.mandatory) ...[
                 const SizedBox(height: AppTheme.space4),
-                _Notice(
-                  icon: Icons.lock_open_outlined,
-                  text: 'Android needs your permission to install apps from '
-                      'Brahma Journal. Allow it, then tap Update again.',
-                  actionLabel: 'Open settings',
-                  onAction: AppUpdateService.openInstallSettings,
-                ),
-              ],
-
-              if (_error != null) ...[
-                const SizedBox(height: AppTheme.space4),
-                _Notice(
-                  icon: Icons.error_outline_rounded,
-                  text: _error!,
-                  danger: true,
-                  actionLabel: 'Open in browser',
-                  onAction: () => AppUpdateService.openDownloadPage(r),
+                const _Notice(
+                  icon: Icons.storefront_outlined,
+                  text: 'Finish the update in the Play Store, then reopen '
+                      'InnenFlow.',
                 ),
               ],
 
@@ -275,7 +168,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
 
               Row(
                 children: [
-                  if (!r.mandatory && !_downloading)
+                  if (!r.mandatory)
                     Expanded(
                       child: TextButton(
                         onPressed: () => Navigator.pop(context),
@@ -285,17 +178,13 @@ class _UpdateDialogState extends State<UpdateDialog> {
                                 color: AppTheme.textMuted)),
                       ),
                     ),
-                  if (!r.mandatory && !_downloading)
-                    const SizedBox(width: AppTheme.space2),
+                  if (!r.mandatory) const SizedBox(width: AppTheme.space2),
                   Expanded(
                     flex: 2,
                     child: SacredButton(
-                      label: _downloading
-                          ? 'Downloading…'
-                          : (_error != null ? 'Try again' : 'Update now'),
-                      icon: _downloading ? null : Icons.download_rounded,
-                      loading: _downloading,
-                      onTap: _downloading ? null : _start,
+                      label: _sentToStore ? 'Open store again' : 'Update now',
+                      icon: Icons.storefront_rounded,
+                      onTap: _start,
                     ),
                   ),
                 ],
@@ -352,70 +241,43 @@ class _Chip extends StatelessWidget {
   }
 }
 
+/// The one remaining inline message: shown to somebody held on a mandatory
+/// update after they have been sent to the store.
+///
+/// It used to carry an action button and a danger variant, for the download
+/// errors and the install-permission prompt. Neither exists now that the store
+/// does the work, so both are gone rather than left as unused parameters.
 class _Notice extends StatelessWidget {
   final IconData icon;
   final String text;
-  final String? actionLabel;
-  final VoidCallback? onAction;
-  final bool danger;
 
-  const _Notice({
-    required this.icon,
-    required this.text,
-    this.actionLabel,
-    this.onAction,
-    this.danger = false,
-  });
+  const _Notice({required this.icon, required this.text});
 
   @override
   Widget build(BuildContext context) {
-    final tint = danger ? AppTheme.danger : AppTheme.accent;
     return Container(
       padding: const EdgeInsets.all(AppTheme.space3),
       decoration: BoxDecoration(
-        color: tint.withValues(alpha: 0.10),
+        color: AppTheme.accent.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-        border: Border.all(color: tint.withValues(alpha: 0.35)),
+        border: Border.all(color: AppTheme.accent.withValues(alpha: 0.35)),
       ),
-      child: Column(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(icon, size: 16, color: danger ? const Color(0xFFF87171) : AppTheme.accentLight),
-              const SizedBox(width: AppTheme.space2),
-              Expanded(
-                child: Text(
-                  text,
-                  style: TextStyle(
-                    fontFamily: 'Outfit',
-                    fontSize: 12,
-                    height: 1.45,
-                    color: danger ? const Color(0xFFFCA5A5) : AppTheme.textSecondary,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          if (actionLabel != null)
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: onAction,
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: AppTheme.space2),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                child: Text(actionLabel!,
-                    style: TextStyle(
-                        fontFamily: 'Outfit',
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: danger ? const Color(0xFFFCA5A5) : AppTheme.accentLight)),
+          Icon(icon, size: 16, color: AppTheme.accentLight),
+          const SizedBox(width: AppTheme.space2),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                fontFamily: 'Outfit',
+                fontSize: 12,
+                height: 1.45,
+                color: AppTheme.textSecondary,
               ),
             ),
+          ),
         ],
       ),
     );

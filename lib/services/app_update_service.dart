@@ -1,33 +1,38 @@
-import 'dart:io';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/app_release.dart';
 
-/// Update checking, downloading and installing.
+/// Tells the user when a newer build exists, and sends them to the Play Store
+/// to get it.
 ///
-/// **What "in-app update" can and cannot mean on Android.** No app outside the
-/// Play Store can install an update silently — the user always confirms in the
-/// system installer. What this removes is everything *around* that: no browser,
-/// no hunting in Downloads, no wondering whether the file is the right one. One
-/// tap, a progress bar, then the system dialog.
+/// **This used to download an APK and install it.** That is not allowed on
+/// Google Play, and not as a matter of taste — the Device and Network Abuse
+/// policy states that an app distributed through Play may not update itself by
+/// any mechanism other than Play's own. The old flow was genuinely nicer while
+/// the app shipped by direct link (one tap, a progress bar, no hunting in the
+/// Downloads folder), and it is exactly why the store forbids it: an app that
+/// can replace its own binary can ship anything after review.
 ///
-/// Where the published URL is not a direct `.apk` — an App Distribution or Play
-/// link is a web page behind a login — downloading it would fetch HTML, so
-/// those open externally instead. [AppRelease.isDirectApk] decides.
+/// So the download, the file writing, the APK sniffing, the install permission
+/// and the whole native installer channel are gone, along with
+/// REQUEST_INSTALL_PACKAGES and the FileProvider. What remains is the part that
+/// was always useful — noticing that this build is behind — and one button that
+/// opens the store listing.
 class AppUpdateService {
-  static const String defaultDownloadLink =
-      'https://appdistribution.firebase.google.com/testerapps/1:440787316408:android:38e64b73850e55b977ce4d';
+  /// Play listing for this app. `market://` opens the Play app directly; the
+  /// https form is the fallback for a device with no Play app (and the link
+  /// that works when the message is shared).
+  static const String playPackage = 'com.brahma.brahmaApp';
+  static const String playStoreUrl =
+      'https://play.google.com/store/apps/details?id=$playPackage';
 
-  static const MethodChannel _installer =
-      MethodChannel('com.brahma.brahmaApp/installer');
+  /// Kept under the old name so callers and the admin publish screen do not
+  /// have to change: it is simply the store listing now.
+  static const String defaultDownloadLink = playStoreUrl;
 
   static PackageInfo? _info;
   static Future<PackageInfo> _packageInfo() async =>
@@ -84,120 +89,36 @@ class AppUpdateService {
     return status.updateAvailable ? status.release : null;
   }
 
-  // ─────────────────────── install permission ───────────────────────
+  // ─────────────────────────── getting it ───────────────────────────
 
-  /// Whether the user has allowed this app to install packages.
-  static Future<bool> canInstallPackages() async {
-    if (!Platform.isAndroid) return false;
-    try {
-      return await _installer.invokeMethod<bool>('canInstall') ?? false;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /// Opens the system screen where that permission is granted.
-  static Future<void> openInstallSettings() async {
-    try {
-      await _installer.invokeMethod('openInstallSettings');
-    } catch (_) {}
-  }
-
-  // ─────────────────────────── downloading ───────────────────────────
-
-  /// Downloads [release] and hands it to Android's installer.
+  /// Opens this app's Play Store listing, where the update actually happens.
   ///
-  /// [onProgress] receives 0.0–1.0, or null while the total size is unknown
-  /// (a server that omits Content-Length), so the UI can show an indeterminate
-  /// bar rather than a fake one.
-  ///
-  /// Returns null on success, or a message describing what went wrong.
-  static Future<String?> downloadAndInstall(
-    AppRelease release, {
-    void Function(double? progress, int received, int? total)? onProgress,
-    CancelToken? cancelToken,
-  }) async {
-    if (!Platform.isAndroid) {
-      await openDownloadPage(release);
-      return null;
-    }
+  /// Tries the `market://` scheme first so the Play app opens directly rather
+  /// than bouncing through a browser. A device without Play — or a release
+  /// document pointing somewhere else entirely — falls back to a normal URL.
+  static Future<void> openStoreListing([AppRelease? release]) async {
+    final published = release?.downloadUrl.trim() ?? '';
+    // A release document may carry its own link (a different store, a web
+    // build). Only override when it is genuinely something else.
+    final target = published.isNotEmpty && published != playStoreUrl
+        ? published
+        : playStoreUrl;
 
-    if (!await canInstallPackages()) {
-      return 'needs-permission';
-    }
-
-    http.StreamedResponse response;
-    final client = http.Client();
-    try {
-      final request = http.Request('GET', Uri.parse(release.downloadUrl));
-      response = await client.send(request);
-    } catch (e) {
-      client.close();
-      return 'Could not start the download. Check your connection.';
-    }
-
-    if (response.statusCode != 200) {
-      client.close();
-      return 'The update could not be downloaded (${response.statusCode}).';
-    }
-
-    try {
-      // Cache, not Downloads: this is a temporary artefact, and the FileProvider
-      // is only configured to share out of the cache directory.
-      final dir = Directory('${(await getTemporaryDirectory()).path}/updates');
-      if (!await dir.exists()) await dir.create(recursive: true);
-
-      final file = File('${dir.path}/brahma-${release.build}.apk');
-      if (await file.exists()) await file.delete();
-
-      final sink = file.openWrite();
-      final total = response.contentLength ?? release.fileSizeBytes;
-      var received = 0;
-
-      await for (final chunk in response.stream) {
-        if (cancelToken?.isCancelled == true) {
-          await sink.close();
-          await file.delete().catchError((_) => file);
-          return null;
+    if (target == playStoreUrl) {
+      try {
+        final market = Uri.parse('market://details?id=$playPackage');
+        if (await launchUrl(market, mode: LaunchMode.externalApplication)) {
+          return;
         }
-        sink.add(chunk);
-        received += chunk.length;
-        onProgress?.call(
-          total != null && total > 0 ? (received / total).clamp(0.0, 1.0) : null,
-          received,
-          total,
-        );
+      } catch (_) {
+        // No Play app installed. The https link below handles it.
       }
-      await sink.flush();
-      await sink.close();
-
-      // An App Distribution page returns HTML with a 200; installing that fails
-      // with an opaque system error, so check the file really is an APK (a zip,
-      // so it starts "PK").
-      final head = await file.openRead(0, 2).first;
-      if (head.length < 2 || head[0] != 0x50 || head[1] != 0x4B) {
-        await file.delete().catchError((_) => file);
-        return 'That link does not point to an installable file.';
-      }
-
-      await _installer.invokeMethod('installApk', {'path': file.path});
-      return null;
-    } catch (e) {
-      debugPrint('❌ Update install failed: $e');
-      return 'The update could not be installed.';
-    } finally {
-      client.close();
     }
-  }
 
-  /// Opens the release page in the browser — used when the link is not a
-  /// direct APK, and as the fallback everywhere else.
-  static Future<void> openDownloadPage(AppRelease release) async {
     try {
-      await launchUrl(Uri.parse(release.downloadUrl),
-          mode: LaunchMode.externalApplication);
+      await launchUrl(Uri.parse(target), mode: LaunchMode.externalApplication);
     } catch (e) {
-      debugPrint('❌ Could not open the download link: $e');
+      debugPrint('❌ Could not open the store listing: $e');
     }
   }
 
@@ -230,19 +151,12 @@ class AppUpdateService {
 
   static Future<void> shareApp() async {
     await Share.share(
-      '🧘 *Brahma Journal* — Your Spiritual Wellness Companion\n\n'
+      '🧘 *InnenFlow* — A quieter place to think\n\n'
       'Five minutes a day of journaling, meditation and reflection — with a '
       'record that shows you it is working.\n\n'
       '🎁 Free for everyone right now — no payment, no card.\n\n'
-      '📥 Download: $defaultDownloadLink\n\n'
-      '#BrahmaJournal #Meditation #OmShanti',
+      '📥 Download: $playStoreUrl\n\n'
+      '#InnenFlow #Meditation #Mindfulness',
     );
   }
-}
-
-/// Lets the UI abandon an in-flight download when the sheet is dismissed.
-class CancelToken {
-  bool _cancelled = false;
-  bool get isCancelled => _cancelled;
-  void cancel() => _cancelled = true;
 }

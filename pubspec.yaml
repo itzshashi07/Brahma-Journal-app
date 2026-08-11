@@ -1,7 +1,7 @@
 name: brahma_app
-description: "Brahma Journal - Your spiritual wellness companion"
+description: "InnenFlow - a quieter place to think"
 publish_to: 'none'
-version: 1.2.0+8
+version: 1.6.0+12
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -55,6 +55,19 @@ dependencies:
   razorpay_flutter: ^1.4.5
   http: ^1.6.0
   speech_to_text: ^7.4.0
+  # Voice notes in the counselling chat. speech_to_text transcribes; this
+  # captures the audio itself, which is what someone in distress actually wants
+  # to send — tone carries what a transcript drops.
+  #
+  # 6.x, not 5.x: record 5.2.1 resolves record_linux 0.7.2 against
+  # record_platform_interface 1.6.0, whose hasPermission() signatures disagree.
+  # The Dart analyzer does not compile the desktop implementations, so that
+  # combination passes `flutter analyze` and then fails the Android build.
+  record: ^6.1.2
+  # Renders the UPI QR for the counselling fee. Pure Dart, so the payment card
+  # works with no network — which matters, because a member is looking at it
+  # precisely when they are about to leave the app for a banking one.
+  qr_flutter: ^4.1.0
   url_launcher: ^6.3.0
   share_plus: ^13.3.0
   path_provider: ^2.1.6
@@ -74,6 +87,8 @@ flutter:
   assets:
     - assets/images/
     - assets/art/
+    # Written article library, parsed only when an admin publishes it.
+    - assets/content/articles/
     - assets/art/avatars/
     - assets/fonts/
     - assets/app_icon.png
@@ -83,6 +98,20 @@ flutter:
       fonts:
         - asset: assets/fonts/Outfit-Regular.ttf
 
+# The InnenFlow mark: concentric arcs turning inward on the app's own dark
+# violet. Regenerate assets/app_icon.png with:
+#
+#   magick -size 1024x1024 gradient:'#1E1E4A-#12122A' \
+#     -fill none -strokewidth 46 -stroke '#4F46E5' \
+#     -draw "stroke-linecap round arc 144,144 880,880 185,95" \
+#     -stroke '#A78BFA' \
+#     -draw "stroke-linecap round arc 244,244 780,780 5,275" \
+#     -stroke '#C4B5FD' \
+#     -draw "stroke-linecap round arc 344,344 680,680 185,95" \
+#     -fill '#EDE9FE' -stroke none -draw "circle 512,512 512,570" \
+#     assets/app_icon.png
+#
+# then `dart run flutter_launcher_icons`.
 flutter_launcher_icons:
   android: true
   ios: false

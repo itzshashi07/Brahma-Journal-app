@@ -18,6 +18,19 @@ class AuthProvider extends ChangeNotifier {
   bool _isAdmin = false;
   StreamSubscription? _profileSubscription;
 
+  /// Raised when somebody signs in, cleared by whoever reads it. The dashboard
+  /// uses it to decide whether to open the welcome celebration — which must
+  /// appear after *signing in* and not on every cold start. See the listener in
+  /// the constructor for how those two are told apart.
+  bool _justSignedIn = false;
+
+  /// True the first time this is read after a sign-in, false afterwards.
+  bool consumeJustSignedIn() {
+    if (!_justSignedIn) return false;
+    _justSignedIn = false;
+    return true;
+  }
+
   User? get user => _user;
   UserProfile? get profile => _profile;
   bool get loading => _loading;
@@ -44,8 +57,29 @@ class AuthProvider extends ChangeNotifier {
     return email != null && email == AppConstants.adminEmail.toLowerCase();
   }
 
+  /// Whether any auth state has arrived yet.
+  ///
+  /// The first event is the SDK reporting what it restored from disk, not
+  /// somebody signing in — telling those apart is the whole reason this exists.
+  bool _sawInitialAuthState = false;
+
   AuthProvider() {
     _authService.authStateChanges.listen((user) async {
+      // The flag is raised HERE rather than in signIn/signUp, and that placement
+      // is load-bearing. Firebase emits this event the instant the credential
+      // resolves — before the awaits in signUp() finish — so the router
+      // redirects and the dashboard reads the flag while those methods are
+      // still running. Setting it from them lost the race and the celebration
+      // never appeared.
+      //
+      // A sign-in is: not the first event we have seen, and we were signed out
+      // before it. That excludes the session restored at cold start, which is
+      // the one case that must stay silent.
+      final wasSignedOut = _user == null;
+      final isFirstEvent = !_sawInitialAuthState;
+      _sawInitialAuthState = true;
+      if (user != null && wasSignedOut && !isFirstEvent) _justSignedIn = true;
+
       _user = user;
       _profileSubscription?.cancel();
       if (user != null) {
@@ -76,6 +110,61 @@ class AuthProvider extends ChangeNotifier {
   Future<void> refreshAdminClaim() async {
     final user = _user;
     if (user != null) await _refreshAdminClaim(user, forceRefresh: true);
+  }
+
+  /// Tells the operator that somebody new is here.
+  ///
+  /// Raised from every way in — email/password registration, Google, phone —
+  /// because the old version only fired from the signup form, so every member
+  /// who arrived through Google or an SMS code joined silently and the operator
+  /// found out by scrolling the profiles collection.
+  ///
+  /// The document id is derived from the uid rather than generated, and that is
+  /// what makes this safe to call on every sign-in: creating it succeeds once,
+  /// and every later attempt is an *update*, which firestore.rules refuses for
+  /// anyone but an admin. So the alert lands exactly once, at first sign-in,
+  /// with no read of the collection (which a member is not allowed to do) and
+  /// no local flag that a reinstall would clear.
+  ///
+  /// Never allowed to throw into the caller: failing to notify the operator
+  /// must not fail somebody's registration.
+  Future<void> _alertAdminNewUser(User user, {String? name}) async {
+    // The operator's own account would otherwise re-raise its own alert on
+    // every login, because for an admin the write is a permitted update.
+    //
+    // Read off the user being signed in rather than off `_user`: this is called
+    // the instant the credential resolves, before the authStateChanges listener
+    // has refreshed either the claim or the stored user.
+    final signedInEmail = user.email?.toLowerCase().trim();
+    if (_isAdmin || signedInEmail == AppConstants.adminEmail.toLowerCase()) {
+      return;
+    }
+
+    final label = name?.trim().isNotEmpty == true
+        ? name!.trim()
+        : (user.displayName ?? user.email?.split('@').first ?? 'A new seeker');
+    final contact = user.email ?? user.phoneNumber ?? 'no contact on file';
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('admin_notifications')
+          .doc('new_user_${user.uid}')
+          .set({
+        'type': 'new_user_signup',
+        'title': '🆕 New Seeker Joined!',
+        'body': '$label ($contact) just joined InnenFlow. '
+            'Add them to Firebase App Distribution testers.',
+        'userEmail': user.email ?? '',
+        'userName': label,
+        'userId': user.uid,
+        'read': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {
+      // Either the alert already exists (the common case on a second login, and
+      // exactly what we want), or the write was refused. Neither is worth
+      // interrupting the person signing in.
+    }
   }
 
   void _listenToProfile(String uid) {
@@ -110,7 +199,11 @@ class AuthProvider extends ChangeNotifier {
       _loading = true;
       notifyListeners();
 
-      await _authService.signIn(email, password);
+      final credential = await _authService.signIn(email, password);
+      final signedIn = credential.user ?? FirebaseAuth.instance.currentUser;
+      // Not awaited: the alert is for the operator, and the person signing in
+      // should not wait on a Firestore round trip to reach their dashboard.
+      if (signedIn != null) unawaited(_alertAdminNewUser(signedIn));
       return true;
     } on FirebaseAuthException catch (e) {
       _error = _mapAuthError(e.code);
@@ -168,19 +261,10 @@ class AuthProvider extends ChangeNotifier {
       // are written by the verifySubscriptionPayment Cloud Function, and only
       // after it has checked the Razorpay HMAC signature against the secret.
 
-      // 4. Notify admin about new user signup
-      try {
-        await FirebaseFirestore.instance.collection('admin_notifications').add({
-          'type': 'new_user_signup',
-          'title': '🆕 New Seeker Joined!',
-          'body': '$name ($email) just joined Brahma Journal. Add them to Firebase App Distribution testers.',
-          'userEmail': email,
-          'userName': name,
-          'userId': uid,
-          'read': false,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-      } catch (_) {}
+      // 4. Notify admin about new user signup. Keyed by uid inside
+      //    [_alertAdminNewUser], so arriving here and then signing in again
+      //    raises one alert, not two.
+      await _alertAdminNewUser(credential.user!, name: name);
 
       _user = credential.user;
       _profile = newProfile;
@@ -241,6 +325,7 @@ class AuthProvider extends ChangeNotifier {
       }
 
       await _ensureProfileExists(credential.user!);
+      unawaited(_alertAdminNewUser(credential.user!));
       return true;
     } on FirebaseAuthException catch (e) {
       _error = e.code == 'account-exists-with-different-credential'
@@ -272,6 +357,7 @@ class AuthProvider extends ChangeNotifier {
         smsCode: smsCode,
       );
       await _ensureProfileExists(credential.user!);
+      unawaited(_alertAdminNewUser(credential.user!));
       return true;
     } on FirebaseAuthException catch (e) {
       _error = e.code == 'invalid-verification-code'

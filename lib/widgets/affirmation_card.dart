@@ -12,7 +12,14 @@ class AffirmationCard extends StatelessWidget {
   final String text;
   final String? backgroundId;
   final VoidCallback? onTapBackground;
-  final double height;
+
+  /// Null lets the card fill whatever its parent gives it — how the
+  /// affirmations screen uses it, where the card is the hero of the page.
+  final double? height;
+
+  /// Centred reads as something to sit with; left-aligned reads as a list item.
+  final bool centered;
+  final double fontSize;
 
   const AffirmationCard({
     super.key,
@@ -20,6 +27,8 @@ class AffirmationCard extends StatelessWidget {
     this.backgroundId,
     this.onTapBackground,
     this.height = 190,
+    this.centered = false,
+    this.fontSize = 20,
   });
 
   @override
@@ -82,24 +91,34 @@ class AffirmationCard extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.all(AppTheme.space5),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                // Stretch, not center: centring the *boxes* leaves each line
+                // sized to its own text, so a wrapped affirmation ends up
+                // ragged. Full-width children plus textAlign centres the words
+                // themselves.
+                crossAxisAlignment: centered
+                    ? CrossAxisAlignment.stretch
+                    : CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Text(
+                  Text(
                     '❝',
+                    textAlign: centered ? TextAlign.center : TextAlign.start,
                     style: TextStyle(
-                        fontSize: 26, color: Colors.white70, height: 1),
+                        fontSize: centered ? 40 : 26,
+                        color: Colors.white70,
+                        height: 1),
                   ),
                   const SizedBox(height: AppTheme.space2),
                   Text(
                     text,
-                    style: const TextStyle(
+                    textAlign: centered ? TextAlign.center : TextAlign.start,
+                    style: TextStyle(
                       fontFamily: 'Outfit',
-                      fontSize: 20,
+                      fontSize: fontSize,
                       height: 1.4,
                       fontWeight: FontWeight.w700,
                       color: Colors.white,
-                      shadows: [
+                      shadows: const [
                         Shadow(color: Colors.black38, blurRadius: 8),
                       ],
                     ),
@@ -150,7 +169,12 @@ class BackgroundPicker extends StatelessWidget {
     return showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
+      // Without this the sheet is capped at half the screen and the lower row
+      // of swatches falls off the bottom edge; SafeArea keeps it clear of the
+      // gesture bar.
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: Container(
         margin: const EdgeInsets.all(AppTheme.space4),
         padding: const EdgeInsets.all(AppTheme.space5),
         decoration: BoxDecoration(
@@ -185,6 +209,7 @@ class BackgroundPicker extends StatelessWidget {
               },
             ),
           ],
+        ),
         ),
       ),
     );

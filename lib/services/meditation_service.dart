@@ -67,3 +67,82 @@ class MeditationService {
     return sessions.fold(0, (acc, s) => acc + (s['duration'] as int));
   }
 }
+
+/// Attention-game sessions.
+///
+/// Deliberately a separate service and collection from meditation. A Schulte
+/// grid is training, not practice, and folding it into meditation minutes would
+/// make the one honest number in the app dishonest.
+class FocusService {
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
+
+  Future<bool> saveSession(String uid, int durationSeconds, String game) async {
+    if (durationSeconds <= 0) return false;
+    try {
+      await _db.collection(AppConstants.focusSessionsCollection).add({
+        'uid': uid,
+        'duration': durationSeconds,
+        'game': game,
+        'clientCreatedAt': Timestamp.fromDate(DateTime.now()),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Total focus-training seconds, all time.
+  Future<int> totalSeconds(String uid) async {
+    try {
+      final snap = await _db
+          .collection(AppConstants.focusSessionsCollection)
+          .where('uid', isEqualTo: uid)
+          .get();
+      return snap.docs.fold<int>(
+          0, (acc, d) => acc + parseIntField(d.data()['duration']));
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  /// Every banked session, so Analytics can break the time down per game.
+  ///
+  /// Sorted client-side rather than with orderBy: the query already filters on
+  /// uid, and adding an ordered field would need a composite index for a list
+  /// that is a few dozen documents long at most.
+  Future<List<FocusSession>> sessions(String uid) async {
+    try {
+      final snap = await _db
+          .collection(AppConstants.focusSessionsCollection)
+          .where('uid', isEqualTo: uid)
+          .get();
+      final list = snap.docs.map((d) {
+        final data = d.data();
+        return FocusSession(
+          game: (data['game'] ?? 'unknown').toString(),
+          seconds: parseIntField(data['duration']),
+          at: parseFirestoreDate(data['createdAt']) ??
+              parseFirestoreDate(data['clientCreatedAt']) ??
+              DateTime.now(),
+        );
+      }).toList();
+      list.sort((a, b) => b.at.compareTo(a.at));
+      return list;
+    } catch (e) {
+      return [];
+    }
+  }
+}
+
+class FocusSession {
+  final String game;
+  final int seconds;
+  final DateTime at;
+
+  const FocusSession({
+    required this.game,
+    required this.seconds,
+    required this.at,
+  });
+}

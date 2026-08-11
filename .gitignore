@@ -51,3 +51,12 @@ app.*.map.json
 # Gradle build reports
 android/build/
 android/app/build/
+
+# Release signing — the upload key and its passwords.
+#
+# Losing these means you can never update the app on Play again under the same
+# listing, and leaking them means somebody else can sign a build as you. Back
+# the .jks up somewhere private and offline; never commit it.
+android/key.properties
+*.jks
+*.keystore

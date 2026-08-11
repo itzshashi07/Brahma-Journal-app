@@ -102,6 +102,72 @@ void main() {
     });
   });
 
+  group('recoverableGapDay', () {
+    test('offers nothing when there is no history at all', () {
+      expect(recoverableGapDay([]), isNull);
+    });
+
+    test('offers nothing while the streak is unbroken', () {
+      expect(recoverableGapDay([daysAgo(0), daysAgo(1), daysAgo(2)]), isNull);
+    });
+
+    test('never offers today — the day is not over', () {
+      // Yesterday and the day before are both written; today is not, and that
+      // is not a missed day yet.
+      expect(recoverableGapDay([daysAgo(1), daysAgo(2)]), isNull);
+    });
+
+    test('offers yesterday when it is the only day missing', () {
+      expect(
+        recoverableGapDay([daysAgo(0), daysAgo(2), daysAgo(3)]),
+        dayMarker(daysAgo(1)),
+      );
+    });
+
+    test('offers yesterday when today is also empty but the streak is otherwise intact', () {
+      expect(
+        recoverableGapDay([daysAgo(2), daysAgo(3)]),
+        dayMarker(daysAgo(1)),
+      );
+    });
+
+    test('offers the day before yesterday when that is the gap', () {
+      expect(
+        recoverableGapDay([daysAgo(0), daysAgo(1), daysAgo(3), daysAgo(4)]),
+        dayMarker(daysAgo(2)),
+      );
+    });
+
+    test('refuses a two-day gap — that is a fresh start, not a slip', () {
+      expect(recoverableGapDay([daysAgo(0), daysAgo(3), daysAgo(4)]), isNull);
+      expect(recoverableGapDay([daysAgo(3), daysAgo(4)]), isNull);
+    });
+
+    test('refuses a gap too far back to revive the streak', () {
+      // Days 1 and 2 are both empty as well, so forgiving day 3 buys nothing.
+      expect(recoverableGapDay([daysAgo(4), daysAgo(5)]), isNull);
+    });
+
+    test('refuses when there is nothing before the gap to join it to', () {
+      expect(recoverableGapDay([daysAgo(0)]), isNull);
+    });
+
+    test('counts an already-recovered day as active, so it cannot be bought twice', () {
+      final entries = [daysAgo(0), daysAgo(2), daysAgo(3)];
+      final firstGap = recoverableGapDay(entries);
+      expect(firstGap, dayMarker(daysAgo(1)));
+      // Feed the forgiven day back in the way ProfileService does.
+      expect(recoverableGapDay([...entries, firstGap!]), isNull);
+    });
+
+    test('is order independent', () {
+      expect(
+        recoverableGapDay([daysAgo(3), daysAgo(0), daysAgo(2)]),
+        dayMarker(daysAgo(1)),
+      );
+    });
+  });
+
   group('formatDurationShort', () {
     test('keeps short sessions visible instead of rounding them to 0.0h', () {
       expect(formatDurationShort(0), '0m');

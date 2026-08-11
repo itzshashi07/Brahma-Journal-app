@@ -248,7 +248,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
         'key': order.keyId,
         'order_id': order.orderId,
         'amount': order.amount,
-        'name': 'Brahma Journal',
+        'name': 'InnenFlow',
         'description': product.title,
         'prefill': {
           'contact': auth.profile?.phone ?? '',

@@ -5,6 +5,7 @@ import '../../providers/auth_provider.dart';
 import '../../services/profile_service.dart';
 import '../../models/user_profile.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/constants/app_constants.dart';
 import '../../widgets/avatar_editor.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/app_update_service.dart';
@@ -26,11 +27,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isSaving = false;
   bool _isLoading = true;
 
-  Future<void> _launchWhatsApp() async {
-    final Uri url = Uri.parse('https://wa.me/918078633912');
+  Future<void> _launchWhatsApp() => _open('https://wa.me/918078633912');
+
+  /// The WhatsApp community — where new builds are announced while the app is
+  /// still off the store.
+  Future<void> _openCommunity() => _open(AppConstants.communityWhatsAppUrl);
+
+  Future<void> _open(String link) async {
+    final url = Uri.parse(link);
     try {
       if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
-        throw 'Could not launch WhatsApp';
+        throw 'Could not open the link';
       }
     } catch (e) {
       if (mounted) {
@@ -227,7 +234,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ),
                         const SizedBox(height: 12),
                         Text(
-                          profile?.displayName ?? 'Spiritual Soul',
+                          profile?.displayName ?? 'Friend',
                           style: const TextStyle(fontFamily: 'Outfit', fontSize: 20, fontWeight: FontWeight.w700, color: AppTheme.textPrimary),
                         ),
                         Text(
@@ -301,6 +308,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
                                   onTap: () => context.push('/support-inbox'),
                                 ),
+                              // Admin: the counselling room. Separate from the
+                              // support inbox because a payment waiting on
+                              // verification is time-critical in a way a
+                              // general enquiry is not.
+                              if (auth.isAdmin)
+                                ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: const Icon(Icons.psychology_alt_outlined, color: AppTheme.accent),
+                                  title: const Text('Counselling Sessions',
+                                      style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
+                                  subtitle: const Text('Verify payments, join calls, reply in chat',
+                                      style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textMuted, fontSize: 11)),
+                                  trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
+                                  onTap: () => context.push('/counselling/inbox'),
+                                ),
+                              // The report queue. Sits beside the other admin
+                              // inboxes because it is the same job: something
+                              // is waiting on a human.
+                              if (auth.isAdmin)
+                                ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: const Icon(Icons.flag_outlined, color: AppTheme.accent),
+                                  title: const Text('Reported content',
+                                      style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
+                                  subtitle: const Text('What members have flagged for review',
+                                      style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textMuted, fontSize: 11)),
+                                  trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
+                                  onTap: () => context.push('/reports'),
+                                ),
                               if (auth.isAdmin)
                                 ListTile(
                                   contentPadding: EdgeInsets.zero,
@@ -316,6 +352,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 title: const Text('Help & Support Center', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
                                 trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
                                 onTap: () => context.push('/support'),
+                              ),
+                              // Deliberately here, in plain sight, rather than
+                              // buried behind a support email. Play requires an
+                              // in-app route to deletion, and an exit somebody
+                              // has to ask permission for is not an exit.
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.no_accounts_outlined, color: AppTheme.danger),
+                                title: const Text('Delete my account',
+                                    style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
+                                subtitle: const Text('Erases everything, permanently',
+                                    style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textMuted, fontSize: 11)),
+                                trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
+                                onTap: () => context.push('/delete-account'),
                               ),
                               const Divider(color: Color(0xFF2D2D4E), height: 24),
                               const SizedBox(height: 12),
@@ -350,22 +400,54 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           _buildAdminPanel(context),
                         ],
                         const SizedBox(height: 30),
-                        // Share App Button
+
+                        // Was "Share Brahma with Friends". Until the app is on
+                        // a store, sharing it hands someone a link they cannot
+                        // install from — an invitation that fails. The
+                        // community is where they can actually be told when
+                        // that changes.
                         SizedBox(
                           width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: () => AppUpdateService.shareApp(),
-                            icon: const Icon(Icons.share_outlined, size: 18),
-                            label: const Text('Share Brahma with Friends', style: TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.w600)),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: AppTheme.primary,
-                              side: const BorderSide(color: AppTheme.primary),
+                          child: ElevatedButton.icon(
+                            onPressed: _openCommunity,
+                            icon: const Icon(Icons.groups_outlined, size: 18, color: Colors.white),
+                            label: const Text('Join our WhatsApp community',
+                                style: TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.w600, color: Colors.white)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF25D366),
                               padding: const EdgeInsets.symmetric(vertical: 14),
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                             ),
                           ),
                         ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'InnenFlow is not on the Play Store yet. The community is '
+                          'where new builds and updates are announced first.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontFamily: 'Outfit', fontSize: 11.5, height: 1.5, color: AppTheme.textMuted),
+                        ),
+
                         const SizedBox(height: 20),
+                        // The legal pages, where every app puts them and where
+                        // a store review will look for them.
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            TextButton(
+                              onPressed: () => context.push('/legal/privacy'),
+                              child: const Text('Privacy Policy',
+                                  style: TextStyle(fontFamily: 'Outfit', fontSize: 12.5, color: AppTheme.textSecondary)),
+                            ),
+                            const Text('·', style: TextStyle(color: AppTheme.textMuted)),
+                            TextButton(
+                              onPressed: () => context.push('/legal/terms'),
+                              child: const Text('Terms of Service',
+                                  style: TextStyle(fontFamily: 'Outfit', fontSize: 12.5, color: AppTheme.textSecondary)),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
                         Center(
                           child: GestureDetector(
                             onTap: _launchWhatsApp,

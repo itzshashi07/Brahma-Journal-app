@@ -5,8 +5,7 @@ import '../../providers/auth_provider.dart';
 import '../../services/affirmation_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/constants/affirmation_backgrounds.dart';
-import '../../core/constants/app_constants.dart';
-import 'dart:math';
+import '../../widgets/affirmation_card.dart';
 
 class AffirmationsScreen extends StatefulWidget {
   const AffirmationsScreen({super.key});
@@ -18,9 +17,11 @@ class AffirmationsScreen extends StatefulWidget {
 class _AffirmationsScreenState extends State<AffirmationsScreen> with SingleTickerProviderStateMixin {
   final AffirmationService _service = AffirmationService();
   List<String> _affirmations = [];
+  /// Chosen background per affirmation, aligned by index. Null means "not
+  /// chosen" — the card then derives a stable one from the text.
+  List<String?> _bgIds = [];
   int _currentIndex = 0;
   bool _isLoading = true;
-  bool _isSpeaking = false;
   final TextEditingController _newAffirmCtrl = TextEditingController();
   late AnimationController _slideCtrl;
   late Animation<Offset> _slideAnim;
@@ -38,10 +39,39 @@ class _AffirmationsScreenState extends State<AffirmationsScreen> with SingleTick
   Future<void> _loadAffirmations() async {
     final auth = context.read<AuthProvider>();
     if (auth.user != null) {
-      final affs = await _service.getUserAffirmations(auth.user!.uid);
-      setState(() { _affirmations = affs; _isLoading = false; });
+      final set = await _service.getUserAffirmationSet(auth.user!.uid);
+      if (!mounted) return;
+      setState(() {
+        _affirmations = set.affirmations;
+        _bgIds = set.backgroundIds;
+        _isLoading = false;
+      });
       _slideCtrl.forward();
     }
+  }
+
+  /// The background belongs to the affirmation, not to the session — pick it
+  /// once and the same line looks the same every time it comes round.
+  void _pickBackground() {
+    if (_affirmations.isEmpty) return;
+    final index = _currentIndex;
+    BackgroundPicker.show(
+      context,
+      selected: _bgIds.length > index
+          ? _bgIds[index] ?? AffirmationBackgrounds.forText(_affirmations[index]).id
+          : null,
+      onChanged: (id) async {
+        final auth = context.read<AuthProvider>();
+        final newBgs = List<String?>.from(_bgIds);
+        newBgs[index] = id;
+        setState(() => _bgIds = newBgs);
+        await _service.saveUserAffirmations(
+          auth.user!.uid,
+          _affirmations,
+          backgroundIds: newBgs,
+        );
+      },
+    );
   }
 
   void _nextAffirmation() {
@@ -61,8 +91,14 @@ class _AffirmationsScreenState extends State<AffirmationsScreen> with SingleTick
     if (text.isEmpty) return;
     final auth = context.read<AuthProvider>();
     final newList = [..._affirmations, text];
-    await _service.saveUserAffirmations(auth.user!.uid, newList);
-    setState(() { _affirmations = newList; _newAffirmCtrl.clear(); });
+    final newBgs = [..._bgIds, null];
+    await _service.saveUserAffirmations(auth.user!.uid, newList,
+        backgroundIds: newBgs);
+    setState(() {
+      _affirmations = newList;
+      _bgIds = newBgs;
+      _newAffirmCtrl.clear();
+    });
     if (mounted) Navigator.pop(context);
   }
 
@@ -185,18 +221,6 @@ class _AffirmationsScreenState extends State<AffirmationsScreen> with SingleTick
     );
   }
 
-  List<Color> _getCardColors(int index) {
-    final colorSets = [
-      [const Color(0xFF7C3AED), const Color(0xFF4338CA)],
-      [const Color(0xFF0891B2), const Color(0xFF0E7490)],
-      [const Color(0xFF059669), const Color(0xFF047857)],
-      [const Color(0xFFD97706), const Color(0xFFB45309)],
-      [const Color(0xFFDC2626), const Color(0xFFB91C1C)],
-      [const Color(0xFF7C3AED), const Color(0xFF6D28D9)],
-    ];
-    return colorSets[index % colorSets.length];
-  }
-
   @override
   void dispose() {
     _slideCtrl.dispose();
@@ -226,9 +250,13 @@ class _AffirmationsScreenState extends State<AffirmationsScreen> with SingleTick
     if (confirmed == true && mounted) {
       final auth = context.read<AuthProvider>();
       final newList = List<String>.from(_affirmations)..removeAt(index);
-      await _service.saveUserAffirmations(auth.user!.uid, newList);
+      final newBgs = List<String?>.from(_bgIds);
+      if (index < newBgs.length) newBgs.removeAt(index);
+      await _service.saveUserAffirmations(auth.user!.uid, newList,
+          backgroundIds: newBgs);
       setState(() {
         _affirmations = newList;
+        _bgIds = newBgs;
         if (_currentIndex >= newList.length && newList.isNotEmpty) {
           _currentIndex = newList.length - 1;
         } else if (newList.isEmpty) {
@@ -296,39 +324,17 @@ class _AffirmationsScreenState extends State<AffirmationsScreen> with SingleTick
                             position: _slideAnim,
                             child: FadeTransition(
                               opacity: _slideCtrl,
-                              child: Container(
+                              child: SizedBox(
                                 width: double.infinity,
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    colors: _getCardColors(_currentIndex),
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                  ),
-                                  borderRadius: BorderRadius.circular(24),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: _getCardColors(_currentIndex)[0].withOpacity(0.4),
-                                      blurRadius: 24, spreadRadius: 4, offset: const Offset(0, 8),
-                                    ),
-                                  ],
-                                ),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(32),
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      const Text('✨', style: TextStyle(fontSize: 48)),
-                                      const SizedBox(height: 24),
-                                      Text(
-                                        '"${_affirmations[_currentIndex]}"',
-                                        textAlign: TextAlign.center,
-                                        style: const TextStyle(
-                                          fontFamily: 'Outfit', fontSize: 22, fontWeight: FontWeight.w600,
-                                          color: Colors.white, height: 1.5,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
+                                child: AffirmationCard(
+                                  text: _affirmations[_currentIndex],
+                                  backgroundId: _currentIndex < _bgIds.length
+                                      ? _bgIds[_currentIndex]
+                                      : null,
+                                  onTapBackground: _pickBackground,
+                                  height: null,
+                                  centered: true,
+                                  fontSize: 22,
                                 ),
                               ),
                             ),

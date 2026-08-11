@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_profile.dart';
 import '../core/constants/app_constants.dart';
 import '../core/utils/stats_utils.dart';
+import 'streak_service.dart';
 
 /// The stats that back the dashboard cards and the community leaderboard.
 class UserStats {
@@ -157,6 +158,13 @@ class ProfileService {
     int? totalSeconds;
     DateTime? lastActiveAt;
 
+    // Days this member has spent a streak recovery on. They count towards the
+    // streak and towards `lastActiveAt` — otherwise a repaired streak would
+    // still age out to zero on the leaderboard, which is the one place the
+    // recovery was bought to show up — but deliberately not towards
+    // `totalJournalEntries`. Nothing is invented; one day is forgiven.
+    final recoveredDays = await StreakService().recoveredDays(uid);
+
     // 1. Journal entries → streak + total entries.
     try {
       final entriesQ = await _db
@@ -172,10 +180,11 @@ class ProfileService {
       }
 
       entriesCount = entriesQ.docs.length;
-      streak = streakFromDates(entryDates);
-      longestStreak = longestStreakFromDates(entryDates);
+      final streakDates = [...entryDates, ...recoveredDays];
+      streak = streakFromDates(streakDates);
+      longestStreak = longestStreakFromDates(streakDates);
       updates['longestStreak'] = longestStreak;
-      for (final d in entryDates) {
+      for (final d in streakDates) {
         final latest = lastActiveAt;
         if (latest == null || d.isAfter(latest)) lastActiveAt = d;
       }
@@ -238,7 +247,7 @@ class ProfileService {
       final profile = await getProfile(uid);
       await _db.collection(AppConstants.leaderboardCollection).doc(uid).set({
         'uid': uid,
-        'displayName': (profile?.displayName ?? 'Soul'),
+        'displayName': (profile?.displayName ?? 'Friend'),
         if (profile?.avatarId != null) 'avatarId': profile!.avatarId,
         'streak': streak ?? 0,
         'longestStreak': longestStreak ?? 0,

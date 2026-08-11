@@ -8,6 +8,9 @@ import '../../models/journal_entry.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/date_utils.dart';
 import '../../services/meditation_service.dart';
+import '../../services/game_stats_service.dart';
+import '../../widgets/craft_consistency_card.dart';
+import '../games/game_catalog.dart';
 import 'dart:ui' as ui;
 import 'dart:io';
 import 'dart:typed_data';
@@ -24,8 +27,15 @@ class AnalyticsScreen extends StatefulWidget {
 
 class _AnalyticsScreenState extends State<AnalyticsScreen> {
   final MeditationService _meditationService = MeditationService();
+  final FocusService _focusService = FocusService();
+  final GameStatsService _gameStats = GameStatsService();
   List<Map<String, dynamic>> _meditationSessions = [];
   bool _loadingMeditation = true;
+
+  /// Game Zone data, kept separate from meditation throughout — same reason the
+  /// sessions live in a different collection. A puzzle is not practice.
+  List<FocusSession> _focusSessions = [];
+  Map<String, GameScoreRow> _gameBests = {};
 
   @override
   void initState() {
@@ -44,9 +54,17 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 
     await context.read<JournalProvider>().loadEntries(uid);
     final sessions = await _meditationService.getSessions(uid);
+    // Fired together: three independent reads, and doing them in sequence made
+    // the screen spin for as long as the slowest one plus the other two.
+    final results = await Future.wait([
+      _focusService.sessions(uid),
+      _gameStats.myRows(uid),
+    ]);
     if (!mounted) return;
     setState(() {
       _meditationSessions = sessions;
+      _focusSessions = results[0] as List<FocusSession>;
+      _gameBests = results[1] as Map<String, GameScoreRow>;
       _loadingMeditation = false;
     });
   }
@@ -88,12 +106,12 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       if (byteData != null) {
         final Uint8List pngBytes = byteData.buffer.asUint8List();
         final tempDir = await getTemporaryDirectory();
-        final file = await File('${tempDir.path}/brahma_spiritual_report.png').create();
+        final file = await File('${tempDir.path}/innenflow_report.png').create();
         await file.writeAsBytes(pngBytes);
 
         await Share.shareXFiles(
           [XFile(file.path)],
-          text: 'My Brahma Spiritual Progress Report 🧘✨',
+          text: 'My InnenFlow Progress Report 📈',
         );
       }
     } catch (e) {
@@ -119,6 +137,23 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 
     final totalSeconds = _meditationService.totalSeconds(_meditationSessions);
     final todaySeconds = _meditationService.todaySeconds(_meditationSessions);
+
+    // Game Zone figures. Time comes from the banked sessions (what was
+    // actually spent), the best scores from the published rows (what was
+    // actually achieved) — two different questions, two different sources.
+    final gameSeconds =
+        _focusSessions.fold<int>(0, (acc, s) => acc + s.seconds);
+    final perGameSeconds = <String, int>{};
+    for (final session in _focusSessions) {
+      perGameSeconds[session.game] =
+          (perGameSeconds[session.game] ?? 0) + session.seconds;
+    }
+    final playedGames = kGames
+        .where((g) =>
+            perGameSeconds.containsKey(g.id) || _gameBests.containsKey(g.id))
+        .toList()
+      ..sort((a, b) =>
+          (perGameSeconds[b.id] ?? 0).compareTo(perGameSeconds[a.id] ?? 0));
 
     final totalMinStr = (totalSeconds / 60).toStringAsFixed(1) + "m";
     final todayStr = todaySeconds > 0
@@ -180,7 +215,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                     Icon(Icons.spa_outlined, size: 18, color: AppTheme.primary),
                                     SizedBox(width: 8),
                                     Text(
-                                      'Brahma Progress Report',
+                                      'Progress Report',
                                       style: TextStyle(
                                         fontFamily: 'Outfit',
                                         fontSize: 16,
@@ -232,6 +267,24 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                                       value: todayStr,
                                       label: "Today's Meditation",
                                       color: const Color(0xFF06D6A0),
+                                    )),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    Expanded(child: _AnalyticCard(
+                                      icon: Icons.sports_esports_outlined,
+                                      value: formatTrainingTime(gameSeconds),
+                                      label: 'Game Zone Time',
+                                      color: const Color(0xFF8B5CF6),
+                                    )),
+                                    const SizedBox(width: 12),
+                                    Expanded(child: _AnalyticCard(
+                                      icon: Icons.videogame_asset_outlined,
+                                      value: '${playedGames.length}/${kGames.length}',
+                                      label: 'Games Played',
+                                      color: const Color(0xFFF59E0B),
                                     )),
                                   ],
                                 ),
@@ -311,6 +364,57 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                           const SizedBox(height: 20),
                         ],
 
+                        // Are you actually doing the work? The one question
+                        // mood charts and meditation minutes cannot answer.
+                        CraftConsistencyCard(entries: entries),
+                        const SizedBox(height: 24),
+
+                        // Game Zone breakdown
+                        Row(
+                          children: [
+                            const Text('Game Zone',
+                                style: TextStyle(fontFamily: 'Outfit', fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+                            const Spacer(),
+                            GestureDetector(
+                              onTap: () => context.push('/games/leaderboard'),
+                              child: const Row(
+                                children: [
+                                  Icon(Icons.emoji_events_outlined, size: 15, color: AppTheme.accentLight),
+                                  SizedBox(width: 4),
+                                  Text('Leaderboard',
+                                      style: TextStyle(fontFamily: 'Outfit', fontSize: 13, color: AppTheme.accentLight)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        if (playedGames.isEmpty)
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: AppTheme.bgCard,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: const Color(0xFF2D2D4E)),
+                            ),
+                            child: GestureDetector(
+                              onTap: () => context.push('/games'),
+                              child: const Text(
+                                'No games played yet. The Game Zone tracks time and best score per game, separately from your meditation minutes.',
+                                style: TextStyle(fontFamily: 'Outfit', fontSize: 12.5, height: 1.5, color: AppTheme.textMuted),
+                              ),
+                            ),
+                          )
+                        else
+                          ...playedGames.map((g) => _GameStatTile(
+                                game: g,
+                                seconds: perGameSeconds[g.id] ?? 0,
+                                best: _gameBests[g.id]?.score,
+                                plays: _gameBests[g.id]?.plays ?? 0,
+                              )),
+                        const SizedBox(height: 20),
+
                         // Recent Entries
                         const Align(
                           alignment: Alignment.centerLeft,
@@ -370,6 +474,95 @@ class _AnalyticCard extends StatelessWidget {
           Text(value, style: TextStyle(fontFamily: 'Outfit', fontSize: 26, fontWeight: FontWeight.w700, color: color)),
           Text(label, style: const TextStyle(fontFamily: 'Outfit', fontSize: 12, color: AppTheme.textMuted)),
         ],
+      ),
+    );
+  }
+}
+
+/// One game's line in Analytics: best score, time spent, runs.
+///
+/// Best and time are deliberately both shown. Time alone rewards grinding, and
+/// a best alone hides that it took forty attempts.
+class _GameStatTile extends StatelessWidget {
+  final GameEntry game;
+  final int seconds;
+  final int? best;
+  final int plays;
+
+  const _GameStatTile({
+    required this.game,
+    required this.seconds,
+    required this.best,
+    required this.plays,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => context.push('/games/leaderboard?game=${game.id}'),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppTheme.bgCard,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFF2D2D4E)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: game.colors),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Icon(game.icon, size: 17, color: Colors.white),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(game.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontFamily: 'Outfit',
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                          color: AppTheme.textPrimary)),
+                  Text(
+                    '${formatTrainingTime(seconds)} played'
+                    '${plays > 0 ? '  ·  $plays ${plays == 1 ? 'run' : 'runs'}' : ''}',
+                    style: const TextStyle(
+                        fontFamily: 'Outfit',
+                        fontSize: 11.5,
+                        color: AppTheme.textMuted),
+                  ),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  best == null ? '—' : game.formatScore(best!),
+                  style: const TextStyle(
+                      fontFamily: 'Outfit',
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.accentLight),
+                ),
+                const Text('best',
+                    style: TextStyle(
+                        fontFamily: 'Outfit',
+                        fontSize: 10,
+                        color: AppTheme.textMuted)),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

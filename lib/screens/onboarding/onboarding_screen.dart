@@ -31,16 +31,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       kicker: 'WELCOME',
       title: 'Five minutes a day\nis the whole practice',
       body:
-          'Brahma Journal is not another app to keep up with. It asks for one short check-in — '
+          'InnenFlow is not another app to keep up with. It asks for one short check-in — '
           'and gives you back a record of who you are becoming.',
       bullets: [
         _Bullet(Icons.schedule_rounded, 'Under five minutes daily'),
         _Bullet(Icons.lock_outline_rounded, 'Private by default — only you read your entries'),
-        _Bullet(Icons.self_improvement_rounded, 'Rooted in Brahma Kumaris practice'),
+        _Bullet(Icons.self_improvement_rounded, 'Built on practices anyone can use'),
       ],
     ),
     _Slide(
-      motif: SacredMotif.om,
+      motif: SacredMotif.ripple,
       kicker: 'THE DAILY LOOP',
       title: 'How a day\nactually works',
       body:
@@ -72,7 +72,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       title: 'Somewhere to put\nwhat you cannot say',
       body:
           'Some things need to leave your head without your name attached. Anonymous reflections '
-          'are posted under a spiritual name, never your own, and fade away after a week.',
+          'are posted under a generated name, never your own, and fade away after a week.',
       bullets: [
         _Bullet(Icons.visibility_off_outlined, 'Your identity is never stored on the post'),
         _Bullet(Icons.auto_delete_outlined, 'Every reflection disappears after 7 days'),

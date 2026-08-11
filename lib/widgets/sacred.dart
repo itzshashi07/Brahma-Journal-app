@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../core/theme/app_theme.dart';
 
-/// Shared visual language for Brahma Journal.
+/// Shared visual language for InnenFlow.
 ///
 /// The screens used to each roll their own gradient container, card border and
 /// button, so nothing quite lined up and the app read as a set of prototypes.
@@ -12,7 +12,7 @@ import '../core/theme/app_theme.dart';
 
 // ─────────────────────────── motifs ───────────────────────────
 
-enum SacredMotif { mandala, lotus, om }
+enum SacredMotif { mandala, lotus, ripple }
 
 /// A hand-authored vector motif, tinted to any colour.
 class Motif extends StatelessWidget {
@@ -32,7 +32,7 @@ class Motif extends StatelessWidget {
   static const _paths = {
     SacredMotif.mandala: 'assets/art/mandala.svg',
     SacredMotif.lotus: 'assets/art/lotus.svg',
-    SacredMotif.om: 'assets/art/om.svg',
+    SacredMotif.ripple: 'assets/art/ripple.svg',
   };
 
   @override

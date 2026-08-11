@@ -134,19 +134,83 @@ service cloud.firestore {
              || isBoundedString(request.resource.data.avatarId, 40);
     }
 
+    // The member's own checklist items.
+    //
+    // Bounded because this is a client-written list on a document the client
+    // owns: without a ceiling, a member can push an arbitrarily large array
+    // into their own profile, and every screen that reads a profile then pays
+    // for it. Twelve matches Professions.maxCustomHabits in the app; the app is
+    // the friendlier of the two and this is the one that actually holds.
+    //
+    // Element shape is not checked. Rules cannot iterate an array, and the cost
+    // of a malformed entry is a dropped item in the parser, not a security
+    // failure — see UserProfile._parseHabits.
+    function customHabitsAreSane() {
+      return !('customHabits' in request.resource.data)
+             || (request.resource.data.customHabits is list
+                 && request.resource.data.customHabits.size() <= 12);
+    }
+
+    // Streak recovery: one forgiven day, once a month.
+    //
+    // The cadence is enforced here rather than only in the app, because the
+    // whole value of a streak is that it was kept — a member who can call this
+    // write in a loop from a script owns a number that means nothing, and every
+    // other member's place on the leaderboard is measured against it.
+    //
+    // Three things are checked:
+    //
+    //   • the timestamp is the *server's*, not the device's, so the clock the
+    //     limit is measured against is not one the caller controls;
+    //   • exactly one day is added per write, so a single permitted write
+    //     cannot forgive a month;
+    //   • the previous recovery is at least 29 days old.
+    //
+    // 29, where the app says 30: a day of slack so a member who waited the full
+    // month is never refused by clock skew. The client is the stricter of the
+    // two, which is the right way round — nobody is shown a button that fails.
+    //
+    // Which day is being forgiven is not checked here. It cannot be: the rule
+    // would need to read every entry document to know whether that day was
+    // genuinely missed and genuinely one day wide. The residual risk is a
+    // member forgiving a day they did not miss — once a month, on their own
+    // streak. That is vanity, and it buys no data, money or privilege.
+    function streakRecoveryFields() {
+      return ['recoveredDays', 'lastStreakRecoveryAt'];
+    }
+
+    function streakRecoveryIsAllowed() {
+      return !changedKeys().hasAny(streakRecoveryFields())
+             || (request.resource.data.lastStreakRecoveryAt == request.time
+                 && request.resource.data.recoveredDays is list
+                 && request.resource.data.recoveredDays.size() <= 120
+                 && request.resource.data.recoveredDays.size()
+                      == resource.data.get('recoveredDays', []).size() + 1
+                 && (!('lastStreakRecoveryAt' in resource.data)
+                     || request.time > resource.data.lastStreakRecoveryAt
+                                       + duration.value(29, 'd')));
+    }
+
     match /profiles/{userId} {
       allow read: if isAdmin() || (isSignedIn() && uid() == userId);
 
       allow create: if isSignedIn()
                     && uid() == userId
                     && !createsServerOnlyProfileFields()
-                    && avatarIdIsSane();
+                    // A brand new profile has nothing to forgive. Seeding these
+                    // at create time would be a way round the cadence check,
+                    // which only ever compares against a *stored* value.
+                    && !request.resource.data.keys().hasAny(streakRecoveryFields())
+                    && avatarIdIsSane()
+                    && customHabitsAreSane();
 
       allow update: if isAdmin()
                     || (isSignedIn()
                         && uid() == userId
                         && !touchesServerOnlyProfileFields()
-                        && avatarIdIsSane());
+                        && streakRecoveryIsAllowed()
+                        && avatarIdIsSane()
+                        && customHabitsAreSane());
 
       allow delete: if isAdmin();
     }
@@ -192,6 +256,128 @@ service cloud.firestore {
                             && !request.resource.data.keys().hasAny(
                                  ['email', 'phone', 'age', 'gender', 'premium', 'role']);
 
+      // Own row deletable by its owner. Account deletion has to be able to
+      // finish, and a public leaderboard entry outliving the account it names
+      // is the most visible possible failure of "delete my data".
+      allow delete: if isAdmin() || (isSignedIn() && uid() == userId);
+    }
+
+    // ──────────────────────────── following ───────────────────────────
+    //
+    // How many followers somebody has is public. Who follows whom is not, and
+    // that asymmetry is the entire design.
+    //
+    // A follower list on a mental-health app is a record of who somebody is
+    // drawn to at the moment they are struggling. It is not published, it is
+    // not queryable, and it is not readable by the person being followed — the
+    // relationship document lives at a path keyed by the *follower's* uid, so
+    // there is no query another client can run that returns it. There is no
+    // "who follows me" view anywhere in the app because there is no way to
+    // build one.
+    //
+    // The counter is the interesting part. It is readable by everyone and
+    // written by the follower, which would normally mean any member could
+    // inflate any other member's number, or their own. It cannot, because a
+    // write to the counter is only accepted alongside the matching change to
+    // the relationship document *in the same commit*:
+    //
+    //   +1 → the follow did not exist before and does after  (existsAfter)
+    //   −1 → the follow existed before and does not after
+    //
+    // A bare +1 with no follow behind it fails the existsAfter check; a repeat
+    // +1 fails the exists check, so following twice is still one follower. Both
+    // halves are written as one WriteBatch by FollowService, which is what lets
+    // the rule see the other half at all.
+
+    function followDoc(followingUid) {
+      return /databases/$(database)/documents/following/$(uid())/targets/$(followingUid);
+    }
+
+    // Follow counts move by exactly one, in the direction the relationship
+    // change implies, and never below zero.
+    function followDeltaIsHonest(followingUid, before) {
+      return (request.resource.data.count == before + 1
+              && !exists(followDoc(followingUid))
+              && existsAfter(followDoc(followingUid)))
+             || (request.resource.data.count == before - 1
+                 && exists(followDoc(followingUid))
+                 && !existsAfter(followDoc(followingUid)));
+    }
+
+    match /following/{followerUid}/targets/{followingUid} {
+      // Owner-only, in every direction. Admin is deliberately excluded from
+      // read here too: nothing in the app needs the graph, and a moderation
+      // power nobody uses is only a breach waiting to be interesting.
+      allow read: if isSignedIn() && followerUid == uid();
+
+      allow create: if isSignedIn()
+                    && followerUid == uid()
+                    // Following yourself would be a free point on your own
+                    // public number.
+                    && followingUid != uid()
+                    && request.resource.data.follower == uid()
+                    && request.resource.data.following == followingUid;
+
+      // Immutable. There is nothing to change about "A follows B" except
+      // whether it exists.
+      allow update: if false;
+
+      allow delete: if isSignedIn() && followerUid == uid();
+    }
+
+    match /follower_counts/{userId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn()
+                    && userId != uid()
+                    && request.resource.data.count == 1
+                    && followDeltaIsHonest(userId, 0);
+
+      allow update: if isSignedIn()
+                    && userId != uid()
+                    && request.resource.data.count is int
+                    && request.resource.data.count >= 0
+                    && changedKeys().hasOnly(['count', 'updatedAt', 'uid'])
+                    && followDeltaIsHonest(userId, resource.data.count);
+
+      // Same reasoning as the leaderboard: removable by its owner so the
+      // account deletion path can complete.
+      allow delete: if isAdmin() || (isSignedIn() && uid() == userId);
+    }
+
+    // ────────────────────────── game scores ───────────────────────────
+    //
+    // The Game Zone board. One row per member per game, id'd `<uid>__<gameId>`,
+    // holding a display name, a best score and a play count — no email, phone,
+    // age or gender, because every signed-in member can read this collection.
+    //
+    // The id binding is what does the real work here. Without it, ownership
+    // checks on the payload alone would still let a member write into the row
+    // another member's client reads back as theirs; with it, a row can only be
+    // written at the one path derived from the writer's own uid.
+    //
+    // Scores are self-reported — a game runs entirely on the device, so there
+    // is no server-side way to know whether a run happened. Bounds keep a
+    // forged row from rendering as nonsense or breaking the sort; the residual
+    // risk is a member claiming a better score than they played. That is
+    // vanity, and it buys no data, money or privilege.
+
+    match /game_scores/{rowId} {
+      allow read: if isSignedIn();
+
+      allow create, update: if isAdmin()
+                            || (incomingIsMine()
+                                && rowId == uid() + '__' + request.resource.data.gameId
+                                && isBoundedString(request.resource.data.gameId, 40)
+                                && isBoundedString(request.resource.data.displayName, 80)
+                                // 100M covers both a points score and the
+                                // overall row, which accumulates seconds.
+                                && isCount(request.resource.data.score, 100000000)
+                                && isCount(request.resource.data.plays, 1000000)
+                                && avatarIdIsSane()
+                                && !request.resource.data.keys().hasAny(
+                                     ['email', 'phone', 'age', 'gender', 'premium', 'role']));
+
       allow delete: if isAdmin();
     }
 
@@ -216,6 +402,18 @@ service cloud.firestore {
     // signed-in user could write a session under any uid with any duration,
     // which is directly forgeable leaderboard input. Duration is now bounded to
     // 24h so a single document cannot poison aggregate stats.
+
+    // Attention-training games. Kept out of /meditation_sessions on purpose:
+    // counting a puzzle as meditation would quietly inflate the one number a
+    // member is trying to be honest with themselves about.
+    match /focus_sessions/{sessionId} {
+      allow read: if storedIsMine() || isAdmin();
+      allow create: if incomingIsMine()
+                    && isCount(request.resource.data.duration, 86400);
+      allow update: if updatingMyOwnDoc()
+                    && isCount(request.resource.data.duration, 86400);
+      allow delete: if storedIsMine() || isAdmin();
+    }
 
     match /meditation_sessions/{sessionId} {
       allow read: if storedIsMine() || isAdmin();
@@ -279,12 +477,30 @@ service cloud.firestore {
                     && isBoundedString(request.resource.data.anonymousName, 60)
                     && !request.resource.data.keys().hasAny(['uid']);
 
+      // A member may APPEND one reply and nothing else.
+      //
+      // This used to be `changedKeys().hasOnly(['replies'])` with only a size
+      // ceiling, which authorised any signed-in member to write the entire
+      // array — so anyone could delete every reply on any reflection, or
+      // rewrite somebody else's words and leave the anonymous name attached to
+      // them. Requiring the size to grow by exactly one turns "may write the
+      // replies field" into "may add a reply", which is what was meant.
+      //
+      // Element-level immutability is not expressible here cheaply, so a
+      // determined caller could still alter an existing entry in the same write
+      // that appends. Moderation (admin delete) and the 500 ceiling are the
+      // backstop; the removal of bulk deletion is the win.
+      function appendsOneReply() {
+        return changedKeys().hasOnly(['replies'])
+               && request.resource.data.replies.size() ==
+                  resource.data.replies.size() + 1
+               && request.resource.data.replies.size() <= 500;
+      }
+
       allow update: if isAdmin()
                     || ownsThought(thoughtId)
                     || ownsLegacyThought()
-                    || (isSignedIn()
-                        && changedKeys().hasOnly(['replies'])
-                        && request.resource.data.replies.size() <= 500);
+                    || (isSignedIn() && appendsOneReply());
 
       allow delete: if isAdmin() || ownsThought(thoughtId) || ownsLegacyThought();
     }
@@ -297,6 +513,45 @@ service cloud.firestore {
       allow read: if false;
       allow create: if incomingIsMine();
       allow update, delete: if false;
+    }
+
+    // The same mirror, one level down: who wrote which reply.
+    //
+    // Replies used to carry their author's uid inside the parent document,
+    // which every signed-in member can read — so the board was anonymous for
+    // posts and fully attributable for the conversation underneath them. The
+    // uid lives here instead.
+    //
+    // Readable by an admin and nobody else. Moderation needs to be able to act
+    // on a person who is abusing an anonymous board; members do not, and giving
+    // them the lookup would recreate the leak in one query.
+    match /thought_reply_authors/{recordId} {
+      allow read: if isAdmin();
+      allow create: if incomingIsMine();
+      allow update: if false;
+      // Cleared alongside the reply it describes.
+      allow delete: if isAdmin();
+    }
+
+    // Which reflections a member is part of, and how many replies they have
+    // seen on each.
+    //
+    // Strictly the member's own bookkeeping, and it has to exist because the
+    // anonymity above is real: /thought_authors is unreadable even by its own
+    // author, so a device genuinely cannot discover which posts are its own.
+    // Without this list there is no way to tell somebody that their reflection
+    // was answered.
+    //
+    // Nobody may read anyone else's — the set of threads a person is in is
+    // exactly the attribution the rest of these rules exist to prevent.
+    match /thought_watch/{userId}/threads/{thoughtId} {
+      allow read: if isSignedIn() && uid() == userId;
+      // Split from delete on purpose: `request.resource` is null on a delete,
+      // so a combined `allow write` with a field check on it denies every
+      // delete by erroring rather than by deciding.
+      allow create, update: if isSignedIn() && uid() == userId
+                            && isCount(request.resource.data.seenReplies, 500);
+      allow delete: if isSignedIn() && uid() == userId;
     }
 
     // ──────────────────────────── blogs ────────────────────────────
@@ -316,9 +571,46 @@ service cloud.firestore {
                       .hasOnly([uid()]));
     }
 
+    // Approval. Any member may *write* an article; only an admin may *publish*
+    // one, and the two are deliberately different permissions.
+    //
+    // /blogs is world-readable — it is the app's public face — so allowing a
+    // member to write straight to it makes this an open publishing platform
+    // moderated after the fact, which for a wellness app with a store listing
+    // is the wrong way round.
+    //
+    // `status` is therefore pinned on create and immutable to its author:
+    //
+    //   • a member's article must arrive as 'pending';
+    //   • an admin's may arrive as anything, because approving their own work
+    //     is what being the reviewer means;
+    //   • an author editing their text cannot touch `status`, `publishedAt` or
+    //     `reviewNote` — they are outside the allowed key set below — so an
+    //     article cannot be published by editing a typo.
+    //
+    // Documents written before approval existed carry no `status` at all and
+    // are treated as published by the client, which is why this does not
+    // require the field to be present on update.
+    function blogStatusOnCreateIsOk() {
+      return isAdmin()
+             || request.resource.data.get('status', '') == 'pending';
+    }
+
     match /blogs/{blogId} {
-      allow read: if true; // public marketing content, no user data
-      allow create, delete: if isAdmin();
+      // Deliberately still public, including articles in review. A pending
+      // article is its author's own words and holds no personal data, and
+      // constraining reads would mean filtering on a field the existing library
+      // does not have — which would hide every article written before this.
+      // The app shows a pending article only to its author and to the admin.
+      allow read: if true;
+
+      // Any member may write an article; the document must name them as author,
+      // so a post can never be attributed to someone else.
+      allow create: if incomingIsMine() && blogStatusOnCreateIsOk();
+
+      // Authors delete their own; admins delete anyone's — the only moderation
+      // path, since articles are readable by the whole world.
+      allow delete: if storedIsMine() || isAdmin();
 
       // `likes` is an array of uids, not a counter — an earlier version of this
       // rule required an integer and silently rejected every like.
@@ -327,7 +619,19 @@ service cloud.firestore {
       // difference of the old and new arrays means the only uid that can appear
       // or disappear is the caller's own, so nobody can like on someone else's
       // behalf or overwrite the list with a fabricated one.
+      //
+      // An author may also edit the text of their own article — but only the
+      // text. `uid`, `likes`, `sharesCount`, `status`, `publishedAt` and
+      // `reviewNote` are all outside the allowed key set, so an edit cannot
+      // reassign authorship, invent engagement, or approve the article it is
+      // editing.
       allow update: if isAdmin()
+                    || (storedIsMine()
+                        && incomingIsMine()
+                        && changedKeys().hasOnly([
+                             'title', 'content', 'category',
+                             'titleHinglish', 'contentHinglish', 'updatedAt'
+                           ]))
                     || (isSignedIn()
                         && changedKeys().hasOnly(['likes', 'sharesCount'])
                         && likesChangeIsOwn()
@@ -441,6 +745,142 @@ service cloud.firestore {
     match /app_config/{documentId} {
       allow read: if isSignedIn();
       allow write: if isAdmin();
+    }
+
+    // ─────────────────── moderation: reports & blocks ───────────────────
+    //
+    // Play requires any app carrying user-generated content to offer in-app
+    // reporting and a way to stop seeing a given person. This app had neither,
+    // and on an anonymous mental-health board that gap is not a formality:
+    // somebody reading a post that frightens them needs a move other than
+    // closing the app.
+
+    match /content_reports/{reportId} {
+      // Only a moderator reads the queue. A report names the reporter, and on
+      // an anonymous board letting anybody read that would expose exactly the
+      // person the feature exists to protect.
+      allow read, update, delete: if isAdmin();
+
+      // One report per person per item, enforced by the caller using a
+      // deterministic `<uid>_<contentId>` document id. Stamped with the
+      // caller's own uid, bounded, and always filed as open — a client cannot
+      // pre-resolve its own report.
+      allow create: if isSignedIn()
+                    && request.resource.data.reporterUid == uid()
+                    && request.resource.data.status == 'open'
+                    && isBoundedString(request.resource.data.contentKind, 20)
+                    && isBoundedString(request.resource.data.contentId, 200)
+                    && isBoundedString(request.resource.data.reason, 80)
+                    && isBoundedString(request.resource.data.get('note', ''), 1000)
+                    && isBoundedString(request.resource.data.get('excerpt', ''), 1000);
+    }
+
+    // Who a member has blocked. Private to them in both directions: the
+    // blocked person is never told, because turning a quiet exit into a
+    // notification is how blocking becomes a confrontation.
+    match /blocks/{userId}/users/{blockedUid} {
+      allow read, write: if isSignedIn() && uid() == userId;
+    }
+
+    // ───────────────────────── counselling ─────────────────────────────
+    //
+    // The most sensitive collection in this project. A session document holds a
+    // real name, age, phone number and the reason someone is asking for mental
+    // health support; the messages beneath it are the conversation itself.
+    // Nothing here is readable by anyone except the member who owns it and an
+    // admin — not by other signed-in members, not by anyone unauthenticated.
+    //
+    // Three things the client must not be able to decide for itself:
+    //
+    //   1. **Approval.** `status: approved` is what unlocks the session, so a
+    //      member who could write it would get counselling without paying.
+    //      Members may only move the status between the states that represent
+    //      their own actions; approving and rejecting are admin-only.
+    //   2. **Ownership.** `uid` is pinned on create and immutable after, so a
+    //      session can never be reassigned to or away from someone.
+    //   3. **Someone else's room.** Message writes are checked against the
+    //      parent session's `uid` with a get(), because a message is only
+    //      as private as the weakest path that can write into its thread.
+    //
+    // Deletion is deliberately allowed to the owner as well as an admin: the
+    // two-hour purge runs on the client from both sides, and a member must be
+    // able to destroy their own transcript on demand.
+
+    function counsellingSession(sessionId) {
+      return get(/databases/$(database)/documents/counselling_sessions/$(sessionId)).data;
+    }
+
+    function ownsSession(sessionId) {
+      return isSignedIn()
+             && exists(/databases/$(database)/documents/counselling_sessions/$(sessionId))
+             && counsellingSession(sessionId).uid == uid();
+    }
+
+    // The status moves a member may make on their own session.
+    //
+    // Expressed as transitions rather than as a list of allowed values, because
+    // the value alone cannot tell the difference between "I paid" and "my
+    // payment cleared". A member may say the first; only an admin may say the
+    // second, so 'approved' appears nowhere on the right-hand side here.
+    //
+    // The unchanged case is what lets a member send a message: posting to the
+    // thread also stamps `lastMessageAt` on the parent, and that update carries
+    // whatever status the session already had — including 'approved'.
+    function memberStatusTransitionOk() {
+      return request.resource.data.status == resource.data.status
+             || (resource.data.status in ['awaiting_payment', 'rejected']
+                 && request.resource.data.status == 'payment_submitted')
+             || (resource.data.status == 'approved'
+                 && request.resource.data.status == 'active')
+             // Either side may close a session that is under way. Ending it is
+             // what starts the two-hour deletion clock, so a member must never
+             // need permission to stop talking.
+             || (resource.data.status in ['approved', 'active']
+                 && request.resource.data.status == 'ended');
+    }
+
+    function memberSessionUpdateIsSane() {
+      return memberStatusTransitionOk()
+             && request.resource.data.uid == resource.data.uid
+             && request.resource.data.name == resource.data.name
+             && isBoundedString(request.resource.data.paymentMode, 60)
+             && isBoundedString(request.resource.data.transactionId, 120);
+    }
+
+    match /counselling_sessions/{sessionId} {
+      allow read: if isAdmin() || storedIsMine();
+
+      allow create: if incomingIsMine()
+                    && isBoundedString(request.resource.data.name, 80)
+                    && isBoundedString(request.resource.data.phone, 20)
+                    && isBoundedString(request.resource.data.concern, 120)
+                    && isBoundedString(request.resource.data.details, 4000)
+                    && request.resource.data.status == 'awaiting_payment';
+
+      allow update: if isAdmin()
+                    || (updatingMyOwnDoc() && memberSessionUpdateIsSane());
+
+      allow delete: if isAdmin() || storedIsMine();
+
+      // Messages carry no uid of their own — the thread's owner is the session,
+      // and duplicating it on every message would be one more field to keep
+      // honest. `sender` is bounded to the three roles the UI renders; an
+      // unknown value would fall through to "member" and mislabel who spoke.
+      match /messages/{messageId} {
+        allow read: if isAdmin() || ownsSession(sessionId);
+
+        allow create: if (isAdmin() || ownsSession(sessionId))
+                      && request.resource.data.sender in ['member', 'admin', 'system']
+                      && isBoundedString(request.resource.data.text, 5000)
+                      && isBoundedString(request.resource.data.get('audioUrl', ''), 2000);
+
+        // Messages are not editable. A counselling transcript that can be
+        // rewritten after the fact is worth less than no transcript, to both
+        // sides.
+        allow update: if false;
+
+        allow delete: if isAdmin() || ownsSession(sessionId);
+      }
     }
 
     // Support tickets raised from the help centre; written by the client,
