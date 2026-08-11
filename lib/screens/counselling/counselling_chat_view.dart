@@ -728,27 +728,65 @@ class _MeetCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // The card says what the call *is* before it offers the button.
+            //
+            // A bare "Join the call" makes somebody about to talk to a stranger
+            // about the worst thing in their life work out for themselves how
+            // long it lasts, what it opens in, and whether they need an
+            // account. Those three unknowns are exactly what makes people put
+            // it off.
             const Row(
               children: [
                 Icon(Icons.videocam_rounded, size: 18, color: AppTheme.success),
                 SizedBox(width: AppTheme.space2),
                 Expanded(
-                  child: Text(
-                    'Your video call room is ready',
-                    style: TextStyle(
-                        fontFamily: 'Outfit',
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w700,
-                        color: AppTheme.textPrimary),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Your video call is ready',
+                        style: TextStyle(
+                            fontFamily: 'Outfit',
+                            fontSize: 14.5,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textPrimary),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Google Meet · 30 minutes',
+                        style: TextStyle(
+                            fontFamily: 'Outfit',
+                            fontSize: 12,
+                            color: AppTheme.textMuted),
+                      ),
+                    ],
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: AppTheme.space3),
+            const Text(
+              '• Somewhere you will not be overheard, if you can manage it.\n'
+              '• Headphones make a difference, both ways.\n'
+              '• It opens in Google Meet — no account or install needed.',
+              style: TextStyle(
+                  fontFamily: 'Outfit',
+                  fontSize: 12.5,
+                  height: 1.6,
+                  color: AppTheme.textSecondary),
             ),
             const SizedBox(height: AppTheme.space3),
             SacredButton(
               label: 'Join the call',
               icon: Icons.open_in_new_rounded,
               onTap: () => openMeet(context, session.meetLink),
+            ),
+            const SizedBox(height: AppTheme.space2),
+            const Text(
+              'The link stays here for the whole session.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontFamily: 'Outfit', fontSize: 11, color: AppTheme.textMuted),
             ),
           ],
         ),

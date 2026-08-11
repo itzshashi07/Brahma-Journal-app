@@ -230,6 +230,31 @@ class NotificationService {
     await _api.delete('/api/notifications/announcements/$announcementId');
   }
 
+  /// Removes one notification from **this member's** feed, everywhere.
+  ///
+  /// ─────────────────────────────────────────────────────────────────────────
+  /// Why this is a server call and not a line in SharedPreferences
+  ///
+  /// It used to be the latter, and that is why deleted notifications came back:
+  /// a broadcast is one document every member reads, so the app could not
+  /// delete it and hid it locally instead. The list lived on one handset. A
+  /// reinstall, a second device, or the announcements tab — which never
+  /// consulted the list at all — and it was there again.
+  ///
+  /// The server keeps a dismissal per member now and filters every feed and the
+  /// badge against it, so gone means gone.
+  ///
+  /// [kind] is 'broadcast' or 'announcement'; the two feeds are two collections
+  /// with separate id spaces.
+  Future<void> dismissNotification(String kind, String id) async {
+    await _api.delete('/api/notifications/dismiss/$kind/$id');
+  }
+
+  /// Clears everything currently in a feed, for this member only.
+  Future<void> dismissAll(String kind) async {
+    await _api.delete('/api/notifications/dismiss/$kind');
+  }
+
   // Clean up
   void dispose() {
     // Nothing to tear down any more: the Firestore subscription this used to

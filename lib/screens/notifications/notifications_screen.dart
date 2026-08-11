@@ -1,11 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
+import '../../services/firebase_messaging_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/notification_center.dart';
 import '../../models/app_notification.dart';
@@ -25,15 +27,34 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
 
   late TabController _tabController;
   final NotificationService _notificationService = NotificationService();
-  List<String> _deletedNotificationIds = [];
-  bool _loadingLocalDeletes = true;
+  /// Ids removed in this session, so a card disappears the instant it is
+  /// tapped rather than after the refetch. The server is the record; this is
+  /// only what keeps the tap from feeling laggy.
+  final Set<String> _justDismissed = {};
+
+  /// Bumped to rebuild the feeds. `Stream.fromFuture` is one-shot, so a
+  /// `StreamBuilder` keyed on nothing would show whatever it fetched when the
+  /// screen opened until the member navigated away and back.
+  int _feedVersion = 0;
+
+  /// A notification arriving while this screen is open should appear on it.
+  ///
+  /// Push is what makes the app live — there is no polling anywhere in this
+  /// codebase and there should not be. But the delivery only raised a tray
+  /// notification and refreshed the badge; the list the member was looking at
+  /// stayed as it was, so the screen that exists to show notifications was the
+  /// one place a new notification did not appear.
+  StreamSubscription? _pushSub;
 
   bool _initialized = false;
 
   @override
   void initState() {
     super.initState();
-    _loadDeletedNotificationIds();
+    _pushSub = FirebaseMessagingService().messages.listen((_) {
+      if (mounted) setState(() => _feedVersion++);
+    });
+
     // Opening this screen is what "seeing" a notification means, so the red
     // badge on the dashboard clears here rather than on each item tapped.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -51,24 +72,33 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
     }
   }
 
-  Future<void> _loadDeletedNotificationIds() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _deletedNotificationIds = prefs.getStringList('deleted_notification_ids') ?? [];
-      _loadingLocalDeletes = false;
-    });
-  }
-
-  Future<void> _deleteNotificationLocally(String id) async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _deletedNotificationIds.add(id);
-    });
-    await prefs.setStringList('deleted_notification_ids', _deletedNotificationIds);
+  /// Removes one card from this member's feed, on the server.
+  ///
+  /// Optimistic: the card goes immediately and comes back with a message if
+  /// the request fails. Waiting on a round trip to acknowledge a delete makes
+  /// a list feel broken on a slow connection, and this is a list people clear
+  /// ten items at a time.
+  Future<void> _dismiss(String kind, String id) async {
+    setState(() => _justDismissed.add(id));
+    try {
+      await _notificationService.dismissNotification(kind, id);
+      if (mounted) context.read<NotificationCenter>().refresh();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _justDismissed.remove(id));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not remove that. Try again in a moment.',
+              style: TextStyle(fontFamily: 'Outfit')),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   @override
   void dispose() {
+    _pushSub?.cancel();
     _tabController.dispose();
     super.dispose();
   }
@@ -165,11 +195,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
   }
 
   Widget _buildNotificationsTab() {
-    if (_loadingLocalDeletes) {
-      return const Center(child: CircularProgressIndicator(color: AppTheme.primary));
-    }
-
     return StreamBuilder<List<AppNotification>>(
+      key: ValueKey('notifications-$_feedVersion'),
       stream: _notificationService.streamNotifications(),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
@@ -181,7 +208,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
 
         final notifications = snapshot.data ?? [];
         final activeNotifications = notifications
-            .where((n) => !_deletedNotificationIds.contains(n.id))
+            .where((n) => !_justDismissed.contains(n.id))
             .toList();
 
         if (activeNotifications.isEmpty) {
@@ -237,23 +264,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
 
     final formattedTime = DateFormat('dd MMM yyyy, hh:mm a').format(notification.createdAt);
 
-    return Dismissible(
-      key: Key(notification.id),
-      direction: DismissDirection.endToStart,
-      background: Container(
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 20),
-        margin: const EdgeInsets.only(bottom: 12),
-        decoration: BoxDecoration(
-          color: Colors.redAccent.withOpacity(0.12),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: const Icon(Icons.delete_sweep, color: Colors.redAccent, size: 28),
-      ),
-      onDismissed: (direction) {
-        _deleteNotificationLocally(notification.id);
-      },
-      child: Card(
+    // No swipe.
+    //
+    // A card that also navigates on tap and scrolls in a list gives a swipe
+    // three things to be confused with, and the one that deletes is the only
+    // one that cannot be undone. It was also invisible: nothing on the screen
+    // said the gesture existed. A button is discoverable, reachable with one
+    // thumb, and impossible to trigger by accident while scrolling.
+    return Card(
         margin: const EdgeInsets.only(bottom: 12),
         color: AppTheme.bgCard,
         shape: RoundedRectangleBorder(
@@ -305,18 +323,24 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
               ),
             ],
           ),
+          trailing: IconButton(
+            icon: const Icon(Icons.close_rounded,
+                color: AppTheme.textMuted, size: 20),
+            tooltip: 'Remove',
+            onPressed: () => _dismiss('broadcast', notification.id),
+          ),
           onTap: () {
             if (notification.route != null && notification.route!.isNotEmpty) {
               context.push(notification.route!);
             }
           },
         ),
-      ),
-    );
+      );
   }
 
   Widget _buildAnnouncementsTab(bool isAdmin) {
     return StreamBuilder<List<Announcement>>(
+      key: ValueKey('announcements-$_feedVersion'),
       stream: _notificationService.streamAnnouncements(),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
@@ -326,7 +350,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
           return const Center(child: CircularProgressIndicator(color: AppTheme.primary));
         }
 
-        final announcements = snapshot.data ?? [];
+        final announcements = (snapshot.data ?? [])
+            .where((a) => !_justDismissed.contains(a.id))
+            .toList();
         if (announcements.isEmpty) {
           return const Center(
             child: Column(
@@ -404,9 +430,23 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
                   ],
                 ),
               ),
+              // Two different deletes, and the difference matters.
+              //
+              // The X removes it from this member's own list. The bin, for an
+              // admin, removes the announcement itself for everybody — so it
+              // asks first, and it is a different icon in a different colour
+              // rather than the same button meaning two things depending on
+              // who is holding the phone.
+              IconButton(
+                icon: const Icon(Icons.close_rounded,
+                    color: AppTheme.textMuted, size: 20),
+                tooltip: 'Remove from my list',
+                onPressed: () => _dismiss('announcement', announcement.id),
+              ),
               if (isAdmin) ...[
                 IconButton(
                   icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                  tooltip: 'Delete for everyone',
                   onPressed: () => _confirmDeleteAnnouncement(context, announcement.id),
                 ),
               ],
