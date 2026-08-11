@@ -52,11 +52,12 @@ class _AnonymousThoughtsScreenState extends State<AnonymousThoughtsScreen> {
     if (!mounted) return;
 
     final notifications = context.read<NotificationCenter>();
-    final auth = context.read<AuthProvider>();
 
-    final mine = auth.user == null
-        ? const <String>{}
-        : await _service.myAuthoredThoughtIds(auth.user!.uid);
+    // Which of these are this member's own comes down with the board itself,
+    // decided by the server against the caller's uid. The device used to keep
+    // its own list, which a reinstall or a second phone silently lost — taking
+    // with it the ability to delete something you had written.
+    final mine = thoughts.where((t) => t.mine).map((t) => t.id).toSet();
     final hidden = await _moderation.hiddenThoughtIds();
     if (!mounted) return;
 
@@ -74,22 +75,13 @@ class _AnonymousThoughtsScreenState extends State<AnonymousThoughtsScreen> {
     // Everything on this screen counts as seen now.
     notifications.markThoughtRepliesSeen();
 
-    // Clear out month-old posts in the background. Not awaited — the feed is
-    // already filtered on read, so this is pure housekeeping and must never
-    // make the screen feel slow.
-    //
-    // An admin sweeps everybody's expired reflections, which is what actually
-    // delivers "deleted after a month" without a TTL policy or a scheduled
-    // function; a member can only ever clear their own.
-    if (auth.isAdmin) {
-      _service.purgeExpiredThoughts();
-      // Strips the author uid that pre-existing replies still carry inside the
-      // public document. Only an admin can rewrite other people's reflections,
-      // so this is the only place the old leak can actually be closed.
-      _service.scrubLegacyReplyIds();
-    } else if (auth.user != null) {
-      _service.purgeMyExpiredThoughts(auth.user!.uid);
-    }
+    // The housekeeping that used to run here — an admin sweeping everybody's
+    // month-old reflections, a member clearing their own, and the pass that
+    // stripped author uids out of old replies — is gone. All three were the
+    // app standing in for a server it did not have: expiry is a TTL index plus
+    // a read filter now, and the API's projection never returns a reply uid to
+    // strip. Doing it from a handset also meant the promise was only kept for
+    // people who happened to open the screen.
   }
 
   Future<void> _postThought() async {

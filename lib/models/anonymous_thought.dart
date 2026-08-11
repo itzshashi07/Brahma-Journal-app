@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 /// One reply on a reflection.
 ///
 /// **Carries no `uid`, and that is the entire point.** Every reply used to
@@ -31,18 +29,18 @@ class ThoughtReply {
 
   factory ThoughtReply.fromMap(Map<String, dynamic> data) {
     return ThoughtReply(
-      id: data['id'] ?? '',
+      id: (data['id'] ?? data['_id'] ?? '').toString(),
       content: data['content'] ?? '',
-      createdAt: data['createdAt'] is Timestamp
-          ? (data['createdAt'] as Timestamp).toDate()
-          : DateTime.tryParse(data['createdAt']?.toString() ?? '') ?? DateTime.now(),
+      createdAt:
+          DateTime.tryParse(data['createdAt']?.toString() ?? '')?.toLocal() ??
+              DateTime.now(),
       anonymousName: data['anonymousName'] ?? 'Quiet Voice',
       anonymousColor: data['anonymousColor'] ?? '#8B5CF6',
     );
   }
 
-  /// Deliberately omits `uid`. Replies written before this change still have
-  /// one stored in Firestore; see [CommunityService.scrubLegacyReplyIds].
+  /// Deliberately omits `uid` — the API never returns one for a reply, and
+  /// nothing on the device should be able to reintroduce it.
   Map<String, dynamic> toMap() {
     return {
       'id': id,
@@ -57,35 +55,49 @@ class ThoughtReply {
 class AnonymousThought {
   final String id;
   final String content;
-  final String uid;
   final DateTime createdAt;
   final List<ThoughtReply> replies;
   final String anonymousName;
   final String anonymousColor;
 
+  /// Whether the person reading this wrote it.
+  ///
+  /// **The server says so; the device cannot work it out.** The board carries
+  /// no author and the authorship map is admin-only, so this is the answer to a
+  /// question only the API can answer, about the caller and nobody else. It is
+  /// what draws the "delete" affordance on somebody's own reflection.
+  ///
+  /// The app used to keep a private local list for this, which meant a
+  /// reinstall or a second phone quietly took away someone's ability to delete
+  /// what they had written.
+  final bool mine;
+
   AnonymousThought({
     required this.id,
     required this.content,
-    required this.uid,
     required this.createdAt,
     this.replies = const [],
     required this.anonymousName,
     required this.anonymousColor,
+    this.mine = false,
   });
 
-  factory AnonymousThought.fromFirestore(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
+  factory AnonymousThought.fromJson(Map<String, dynamic> data) {
     return AnonymousThought(
-      id: doc.id,
+      id: (data['_id'] ?? data['id'] ?? '').toString(),
       content: data['content'] ?? '',
-      uid: data['uid'] ?? '',
-      createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      createdAt:
+          DateTime.tryParse(data['createdAt']?.toString() ?? '')?.toLocal() ??
+              DateTime.now(),
       replies: (data['replies'] as List<dynamic>?)
-              ?.map((r) => ThoughtReply.fromMap(r as Map<String, dynamic>))
+              ?.map((r) => ThoughtReply.fromMap(
+                    Map<String, dynamic>.from(r as Map),
+                  ))
               .toList() ??
-          [],
+          const [],
       anonymousName: data['anonymousName'] ?? 'Quiet Voice',
       anonymousColor: data['anonymousColor'] ?? '#8B5CF6',
+      mine: data['mine'] == true,
     );
   }
 
