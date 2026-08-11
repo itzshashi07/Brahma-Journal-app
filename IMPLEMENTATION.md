@@ -230,7 +230,26 @@ Production is the default base URL, so a release build needs no flags and
 
 Firebase setup — Google sign-in needs SHA-1 and SHA-256 fingerprints in the
 console; phone/OTP needs the same for Play Integrity. FCM setup including the
-APNs key is in `docs/FCM-SETUP.md` in the main project.
+APNs key is in `docs/FCM-SETUP.md` in the [backend repo](https://github.com/itzshashi07/innenflow-backend).
+
+### What this repo deploys to Firebase, and what it does not
+
+```bash
+firebase deploy --only firestore    # rules + indexes, from here
+```
+
+`firebase.json` here covers **Firestore rules, indexes and the Flutter platform
+config — nothing else.** The Cloud Functions this app calls
+(`backend_service.dart`) live in the backend repo and are deployed from there.
+
+It used to be the other way round: this `firebase.json` named
+`"source": "../functions"`, deploying a directory that was not in this
+repository. It only ever resolved because both folders happened to sit inside
+one workspace on one machine, and a fresh clone of this repo deployed nothing.
+
+The **rules tests also live in the backend repo** (`firestore-tests/`), reading
+`firestore.rules` from a checkout of this one. Change a rule here and run that
+suite before deploying — it is the thing that catches a loosened rule.
 
 ---
 
@@ -239,7 +258,7 @@ APNs key is in `docs/FCM-SETUP.md` in the main project.
 | Part | Repo |
 |---|---|
 | This app | `github.com/itzshashi07/Brahma-Journal-app` |
-| Node + MongoDB API | `github.com/itzshashi07/innenflow-backend` |
+| API + Cloud Functions + rules tests | `github.com/itzshashi07/innenflow-backend` |
 | Website | `github.com/itzshashi07/brahma-journal-web-app` |
 
 **A change that spans two is two commits to two remotes.**
@@ -253,6 +272,13 @@ Things that must move together:
 - **Legal copy.** `lib/screens/legal/legal_screen.dart` ↔ the website's
   `src/content/legal.ts`.
 - **API shapes.** A changed response breaks both clients.
+- **`firestore.rules`** ↔ the backend's `firestore-tests/`. The file is deployed
+  from here and tested from there.
+- **Callable names.** The strings in `lib/services/backend_service.dart`
+  (`createSubscription`, `verifyProductPayment`, `sendSupportEmail`,
+  `setAdminClaim`, …) are the exported names in the backend's
+  `functions/index.js`. Renaming one fails at runtime with `NOT_FOUND`, not at
+  build time — there is nothing to catch it but this note.
 
 ---
 
