@@ -37,6 +37,18 @@ class AppNotification {
     );
   }
 
+  /// Built from the Node.js API's JSON.
+  factory AppNotification.fromJson(Map<String, dynamic> data) {
+    return AppNotification(
+      id: data['_id']?.toString() ?? '',
+      title: data['title'] ?? '',
+      body: data['body'] ?? '',
+      type: data['type'] ?? 'info',
+      route: data['route'],
+      createdAt: _parseDateTime(data['createdAt']),
+    );
+  }
+
   Map<String, dynamic> toMap() {
     return {
       'title': title,

@@ -1,89 +1,161 @@
-import 'dart:io';
+import 'dart:async';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 
-import '../core/constants/counselling.dart';
 import '../models/counselling_session.dart';
+import 'api_feed.dart';
+import 'api_service.dart';
 
-/// Firestore and Storage for the counselling room.
+/// The counselling room, over the API.
 ///
-/// Two rules shape everything here:
+/// ─────────────────────────────────────────────────────────────────────────
+/// What changed, and why it is not just a transport swap
 ///
-///   1. **Nothing outlives the session by more than two hours.** That was
-///      promised to the member in writing, so it cannot depend on a Cloud
-///      Function that may not be deployed on a free plan. [purgeExpired] runs
-///      on the client, from both sides of the conversation, whenever anyone
-///      opens the feature — and the `purgeAfter` field is left on the document
-///      so a scheduled function can do the same job later without a migration.
+/// This class used to talk to Firestore directly, and it held four open
+/// `snapshots()` listeners: the member's sessions, every session for the admin
+/// inbox, one session, and one transcript. It also *drove the flow* — it wrote
+/// the scripted messages, it computed `purgeAfter` from the handset's clock,
+/// and it raised its own admin alerts.
 ///
-///   2. **The client never asserts privilege.** Approving a payment, rejecting
-///      one and ending a session are admin actions; the app hides those buttons
-///      from members, and firestore.rules rejects the writes regardless of what
-///      the app decides to show.
+/// All three of those have moved to the server, and each for a reason of its
+/// own:
+///
+///   • **The listeners** had to go: MongoDB has no client realtime channel.
+///     What replaces them is [ApiFeed] — read on open, re-read when FCM says
+///     something happened. Unlike the listeners, that also works when the app
+///     has been killed, which is the case that mattered most here. Somebody who
+///     closed the app never found out their counsellor had replied.
+///
+///   • **The scripted messages** were being written by whichever handset
+///     happened to make the state change. If the counsellor's app died between
+///     "approve" and "post the approval message", the member's session went
+///     live with nothing in the chat explaining why. The server writes both in
+///     one request now.
+///
+///   • **`purgeAfter`** was computed on the device. A wrong clock could
+///     lengthen the two-hour retention window on the most sensitive data this
+///     app holds. It is stamped from the server's clock and enforced by a
+///     MongoDB TTL index, which deletes whether or not anybody opens the app —
+///     so [purgeExpired], which used to run from both sides on every screen
+///     open, has no work left to do and is gone.
+///
+/// What is left here is a thin client: request, parse, hand back.
 class CounsellingService {
-  final _db = FirebaseFirestore.instance;
-  final _storage = FirebaseStorage.instance;
-
-  static const _collection = 'counselling_sessions';
+  final ApiService _api = ApiService();
 
   /// How long a finished conversation is kept before it is destroyed.
+  ///
+  /// Kept as a constant because the chat screen counts it down on screen. The
+  /// server owns the actual deadline — this is for rendering, not for deciding.
   static const retention = Duration(hours: 2);
 
   String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
-  CollectionReference<Map<String, dynamic>> get _sessions =>
-      _db.collection(_collection);
-
-  CollectionReference<Map<String, dynamic>> _messages(String sessionId) =>
-      _sessions.doc(sessionId).collection('messages');
-
   // ─────────────────────────── reading ───────────────────────────
 
   /// The member's own sessions, newest first.
+  ///
+  /// One feed per instance rather than one per call: two widgets asking for the
+  /// member's sessions should share a fetch, not race each other into two.
+  ApiFeed<List<CounsellingSession>>? _mine;
+  ApiFeed<List<CounsellingSession>>? _all;
+  final Map<String, ApiFeed<List<ChatMessage>>> _transcripts = {};
+
   Stream<List<CounsellingSession>> streamMine() {
-    final uid = _uid;
-    if (uid == null) return Stream.value(const []);
-    return _sessions
-        .where('uid', isEqualTo: uid)
-        .snapshots()
-        .map(_sortedSessions);
+    if (_uid == null) return Stream.value(const []);
+    _mine ??= ApiFeed(_loadMine, debugLabel: 'counselling/mine');
+    return _mine!.stream;
   }
 
-  /// Every session, for the admin inbox.
-  Stream<List<CounsellingSession>> streamAll() =>
-      _sessions.snapshots().map(_sortedSessions);
+  /// Every session, for the admin inbox. The server refuses this to anyone
+  /// without the claim, so there is no privilege asserted here.
+  Stream<List<CounsellingSession>> streamAll() {
+    _all ??= ApiFeed(_loadAll, debugLabel: 'counselling/inbox');
+    return _all!.stream;
+  }
 
-  /// Sorted in Dart rather than by Firestore. `orderBy('createdAt')` combined
-  /// with the `where('uid')` filter needs a composite index, and a missing
-  /// index fails the query outright — which would show the member an empty
-  /// screen at the exact moment they are asking for help.
-  List<CounsellingSession> _sortedSessions(QuerySnapshot<Map<String, dynamic>> s) {
-    final list = s.docs.map(CounsellingSession.fromDoc).toList();
+  Stream<List<ChatMessage>> streamMessages(String sessionId) {
+    final feed = _transcripts.putIfAbsent(
+      sessionId,
+      () => ApiFeed(
+        () => _loadMessages(sessionId),
+        debugLabel: 'counselling/messages',
+      ),
+    );
+    return feed.stream;
+  }
+
+  /// One session, re-read whenever a push says something moved.
+  Stream<CounsellingSession?> streamSession(String id) =>
+      ApiFeed<CounsellingSession?>(
+        () => session(id),
+        debugLabel: 'counselling/session',
+      ).stream;
+
+  Future<CounsellingSession?> session(String id) async {
+    try {
+      final body = await _api.get('/api/counselling/sessions/$id');
+      final raw = body?['session'];
+      return raw == null
+          ? null
+          : CounsellingSession.fromJson(Map<String, dynamic>.from(raw));
+    } on ApiException catch (e) {
+      // A session that has been purged is a 404, and that is not an error — it
+      // is the promise being kept.
+      if (e.status == 404) return null;
+      rethrow;
+    }
+  }
+
+  Future<List<CounsellingSession>> _loadMine() async {
+    final body = await _api.get('/api/counselling/sessions');
+    return _sessions(body?['sessions']);
+  }
+
+  Future<List<CounsellingSession>> _loadAll() async {
+    final body = await _api.get('/api/counselling/inbox');
+    return _sessions(body?['sessions']);
+  }
+
+  Future<List<ChatMessage>> _loadMessages(String sessionId) async {
+    final body = await _api.get(
+      '/api/counselling/sessions/$sessionId/messages',
+      query: {'limit': '200'},
+    );
+    final raw = (body?['messages'] as List?) ?? const [];
+    return raw
+        .map((m) => ChatMessage.fromJson(Map<String, dynamic>.from(m as Map)))
+        .toList();
+  }
+
+  /// The server already sorts newest-first; this keeps the ordering explicit so
+  /// a change at either end cannot silently reverse the inbox.
+  List<CounsellingSession> _sessions(dynamic raw) {
+    final list = ((raw as List?) ?? const [])
+        .map((s) =>
+            CounsellingSession.fromJson(Map<String, dynamic>.from(s as Map)))
+        .toList();
     list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return list;
   }
 
-  Stream<CounsellingSession?> streamSession(String id) =>
-      _sessions.doc(id).snapshots().map(
-          (d) => d.exists ? CounsellingSession.fromDoc(d) : null);
-
-  Stream<List<ChatMessage>> streamMessages(String sessionId) => _messages(
-        sessionId,
-      ).orderBy('createdAt').snapshots().map(
-            (s) => s.docs.map(ChatMessage.fromDoc).toList(),
-          );
+  /// Re-reads whatever is on screen. Wired to pull-to-refresh, and called after
+  /// this class's own writes so the change is visible without waiting for the
+  /// push that announces it.
+  Future<void> refresh({String? sessionId}) async {
+    await Future.wait([
+      if (_mine != null) _mine!.refresh(),
+      if (_all != null) _all!.refresh(),
+      if (sessionId != null && _transcripts.containsKey(sessionId))
+        _transcripts[sessionId]!.refresh(),
+    ]);
+  }
 
   // ─────────────────────────── intake ───────────────────────────
 
-  /// Opens a session and seeds the conversation.
-  ///
-  /// The three opening messages are written here rather than rendered by the
-  /// chat screen so that they are real messages: the admin sees exactly what
-  /// the member was told, in order, and the member sees the same thing after
-  /// closing and reopening the app.
+  /// Opens a session. The welcome and the payment instructions are written by
+  /// the server in the same request — see config/counselling.js in the API.
   Future<String> createSession({
     required String name,
     required String age,
@@ -93,319 +165,158 @@ class CounsellingService {
     required String language,
     required String details,
   }) async {
-    final uid = _uid;
-    if (uid == null) throw StateError('Not signed in');
+    if (_uid == null) throw StateError('Not signed in');
 
-    final doc = _sessions.doc();
-    final session = CounsellingSession(
-      id: doc.id,
-      uid: uid,
-      name: name,
-      age: age,
-      gender: gender,
-      phone: phone,
-      concern: concern,
-      language: language,
-      details: details,
-      amount: Counselling.fee,
-      createdAt: DateTime.now(),
-    );
-    await doc.set(session.toMap());
+    final body = await _api.post('/api/counselling/sessions', {
+      'name': name,
+      'age': age,
+      'gender': gender,
+      'phone': phone,
+      'concern': concern,
+      'language': language,
+      'details': details,
+    });
 
-    await _system(doc.id, Counselling.welcome(name));
-    await _system(doc.id, Counselling.paymentAsk);
-
-    await _alertAdmin(
-      type: 'counselling_request',
-      title: '🧘 New counselling request',
-      body: '$name · $concern · awaiting ₹${Counselling.fee} payment',
-    );
-
-    return doc.id;
+    await refresh();
+    return '${body?['session']?['_id'] ?? ''}';
   }
 
   // ─────────────────────────── payment ───────────────────────────
 
-  /// The member reports what they paid and how. Verification is a human
-  /// reading a bank statement — this only records the claim.
+  /// The member reports what they paid and how. Verification is a human reading
+  /// a bank statement — this only records the claim.
+  ///
+  /// `memberName` is no longer passed: the server reads the name off the
+  /// session it is already loading, so the operator alert cannot be addressed
+  /// to whatever the client felt like sending.
   Future<void> submitPayment({
     required String sessionId,
     required String paymentMode,
     required String transactionId,
-    required String memberName,
   }) async {
-    await _sessions.doc(sessionId).update({
+    await _api.post('/api/counselling/sessions/$sessionId/payment', {
       'paymentMode': paymentMode,
       'transactionId': transactionId,
-      'status': CounsellingStatus.paymentSubmitted.wire,
     });
-
-    await _messages(sessionId).add({
-      'sender': ChatSender.member.wire,
-      'kind': ChatKind.payment.wire,
-      'text': 'Paid ₹${Counselling.fee} · $paymentMode\nTransaction ID: $transactionId',
-      'paymentMode': paymentMode,
-      'transactionId': transactionId,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-
-    await _system(sessionId, Counselling.paymentReceived);
-
-    await _alertAdmin(
-      type: 'counselling_payment',
-      title: '💳 Counselling payment to verify',
-      body: '$memberName paid via $paymentMode · ref $transactionId',
-    );
+    await refresh(sessionId: sessionId);
   }
 
   /// Admin: payment checked and confirmed.
-  Future<void> approve(String sessionId) async {
-    await _sessions.doc(sessionId).update({
-      'status': CounsellingStatus.approved.wire,
-      'approvedAt': FieldValue.serverTimestamp(),
-    });
-    await _system(sessionId, Counselling.approved);
-  }
+  Future<void> approve(String sessionId) => _setStatus(sessionId, 'approved');
 
-  /// Admin: payment could not be found. Deliberately reversible — the member
-  /// is put back in front of the payment form rather than shown a dead end.
-  Future<void> reject(String sessionId) async {
-    await _sessions.doc(sessionId).update({
-      'status': CounsellingStatus.rejected.wire,
-    });
-    await _system(sessionId, Counselling.rejected);
-  }
+  /// Admin: payment could not be found. Deliberately reversible — the member is
+  /// put back in front of the payment form rather than shown a dead end.
+  Future<void> reject(String sessionId) => _setStatus(sessionId, 'rejected');
 
   // ─────────────────────────── format ───────────────────────────
 
-  /// The member picks a video call or chat. Either way the session goes live
-  /// and the admin is told, because both formats need a human to show up.
+  /// The member picks a video call or a chat.
+  ///
+  /// Chat goes live immediately. A call becomes a *request* and waits for a
+  /// counsellor to confirm and issue a room — see the note on
+  /// [CounsellingStatus.meetRequested].
   Future<void> chooseMode({
     required String sessionId,
     required CounsellingMode mode,
-    required String memberName,
   }) async {
-    await _sessions.doc(sessionId).update({
+    await _api.post('/api/counselling/sessions/$sessionId/mode', {
       'mode': mode.wire,
-      'status': CounsellingStatus.active.wire,
     });
+    await refresh(sessionId: sessionId);
+  }
 
-    if (mode == CounsellingMode.meet) {
-      await _system(sessionId, Counselling.meetChosen(Counselling.meetLink));
-      await _alertAdmin(
-        type: 'counselling_meet',
-        title: '📹 Join the counselling call',
-        body: '$memberName chose a ${Counselling.sessionMinutes}-minute video call. '
-            'Room: ${Counselling.meetLink}',
-      );
-    } else {
-      await _system(sessionId, Counselling.chatChosen);
-      await _alertAdmin(
-        type: 'counselling_chat',
-        title: '💬 Counselling chat started',
-        body: '$memberName is waiting in the chat.',
-      );
+  /// Admin: confirm the call and issue a room for this session.
+  ///
+  /// The link is validated server-side as well. Checking it here too is not
+  /// redundancy for its own sake — it is the difference between the counsellor
+  /// seeing "that does not look like a meeting link" while the field is still
+  /// in front of them, and a member waiting for a call that cannot happen.
+  Future<void> approveMeeting({
+    required String sessionId,
+    required String link,
+  }) async {
+    final trimmed = link.trim();
+    final uri = Uri.tryParse(trimmed);
+    if (trimmed.isEmpty ||
+        uri == null ||
+        !uri.isAbsolute ||
+        !(uri.scheme == 'http' || uri.scheme == 'https')) {
+      throw ArgumentError('That does not look like a meeting link.');
     }
+
+    await _api.patch('/api/counselling/sessions/$sessionId/status', {
+      'status': 'active',
+      'meetLink': trimmed,
+    });
+    await refresh(sessionId: sessionId);
   }
 
   // ─────────────────────────── messages ───────────────────────────
 
+  /// Sends a message.
+  ///
+  /// The `sender` argument is gone. It was decided by the app, which meant a
+  /// member's build could label its own message `admin` and impersonate a
+  /// counsellor in the transcript. The server derives the role from the
+  /// verified token instead, so there is nothing here to get wrong.
   Future<void> sendText({
     required String sessionId,
-    required ChatSender sender,
     required String text,
   }) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
 
-    await _messages(sessionId).add({
-      'sender': sender.wire,
-      'kind': ChatKind.text.wire,
+    await _api.post('/api/counselling/sessions/$sessionId/messages', {
       'text': trimmed,
-      'createdAt': FieldValue.serverTimestamp(),
+      'kind': 'text',
     });
-    await _touch(sessionId, trimmed, sender);
-
-    if (sender == ChatSender.member) {
-      await _alertAdmin(
-        type: 'counselling_message',
-        title: '💬 New counselling message',
-        body: trimmed.length > 120 ? '${trimmed.substring(0, 120)}…' : trimmed,
-      );
-    }
-  }
-
-  /// Uploads a voice note and posts it.
-  ///
-  /// The object lives under `counselling/<sessionId>/` so [purgeExpired] can
-  /// delete the audio along with the transcript — a voice note left behind in
-  /// Storage after the messages are gone would break the same promise more
-  /// badly, since it is the member's actual voice.
-  Future<void> sendVoiceNote({
-    required String sessionId,
-    required ChatSender sender,
-    required File file,
-    required int seconds,
-  }) async {
-    final ref = _storage
-        .ref()
-        .child('counselling/$sessionId/${DateTime.now().millisecondsSinceEpoch}.m4a');
-
-    await ref.putFile(file, SettableMetadata(contentType: 'audio/mp4'));
-    final url = await ref.getDownloadURL();
-
-    await _messages(sessionId).add({
-      'sender': sender.wire,
-      'kind': ChatKind.audio.wire,
-      'text': '',
-      'audioUrl': url,
-      'audioPath': ref.fullPath,
-      'audioSeconds': seconds,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-    // The local copy is deleted the moment it is safely uploaded. Leaving
-    // recordings of a counselling session lying in the cache directory would
-    // outlive the two-hour promise by however long the OS takes to clear it.
-    try {
-      if (file.existsSync()) await file.delete();
-    } catch (e) {
-      debugPrint('⚠️ Could not remove the local voice note: $e');
-    }
-
-    await _touch(sessionId, '🎤 Voice note', sender);
-
-    if (sender == ChatSender.member) {
-      await _alertAdmin(
-        type: 'counselling_message',
-        title: '🎤 New counselling voice note',
-        body: 'A member sent a ${seconds}s voice note.',
-      );
-    }
-  }
-
-  Future<void> _system(String sessionId, String text) async {
-    await _messages(sessionId).add({
-      'sender': ChatSender.system.wire,
-      'kind': ChatKind.text.wire,
-      'text': text,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-  }
-
-  /// Stamps the parent session so the inbox can sort and badge without reading
-  /// every thread's subcollection.
-  ///
-  /// `lastMessageBy` is what lets the member's device tell "my counsellor
-  /// replied" from "I sent that" — without it, sending a message would notify
-  /// the sender about their own message.
-  Future<void> _touch(String sessionId, String preview, ChatSender by) async {
-    await _sessions.doc(sessionId).update({
-      'lastMessageAt': FieldValue.serverTimestamp(),
-      'lastMessageBy': by.wire,
-      'lastMessagePreview':
-          preview.length > 80 ? '${preview.substring(0, 80)}…' : preview,
-    });
+    await refresh(sessionId: sessionId);
   }
 
   // ─────────────────────────── ending & deletion ───────────────────────────
 
   /// Ends the session and starts the two-hour clock.
   ///
-  /// `purgeAfter` is computed on the client, which means a device with a wrong
-  /// clock could shorten or lengthen the window. That is acceptable here: the
-  /// failure mode is a transcript deleted early, or late by the size of the
-  /// clock skew, and both sides plus a future scheduled function all read the
-  /// same field.
-  Future<void> endSession(String sessionId) async {
-    final now = DateTime.now();
-    await _sessions.doc(sessionId).update({
-      'status': CounsellingStatus.ended.wire,
-      'endedAt': Timestamp.fromDate(now),
-      'purgeAfter': Timestamp.fromDate(now.add(retention)),
-    });
-    await _system(sessionId, Counselling.ended);
+  /// The deadline is stamped from the server's clock and enforced by a MongoDB
+  /// TTL index. It used to be computed here from `DateTime.now()`, which put
+  /// the retention promise at the mercy of a handset's clock.
+  Future<void> endSession(String sessionId) => _setStatus(sessionId, 'ended');
+
+  Future<void> _setStatus(String sessionId, String status) async {
+    await _api.patch(
+      '/api/counselling/sessions/$sessionId/status',
+      {'status': status},
+    );
+    await refresh(sessionId: sessionId);
   }
 
-  /// Deletes every session whose two hours are up, including its messages and
-  /// any voice notes.
-  ///
-  /// Called whenever either party opens the counselling screens. Firestore has
-  /// no cascading delete, so the subcollection has to go first — dropping the
-  /// parent alone would leave orphaned messages that no rule path can reach and
-  /// no screen can show, which is the worst of both worlds.
-  Future<int> purgeExpired({bool asAdmin = false}) async {
-    try {
-      final query = asAdmin
-          ? _sessions.where('purgeAfter', isLessThan: Timestamp.now())
-          : _sessions
-              .where('uid', isEqualTo: _uid)
-              .where('purgeAfter', isLessThan: Timestamp.now());
-
-      final expired = await query.get();
-      for (final doc in expired.docs) {
-        await deleteSession(doc.id);
-      }
-      return expired.docs.length;
-    } catch (e) {
-      // A member without permission to run the admin query, an offline device,
-      // a missing index: none of these should stop the screen from opening.
-      debugPrint('⚠️ Counselling purge skipped: $e');
-      return 0;
-    }
-  }
-
-  /// Removes one conversation entirely — messages, audio, then the session.
+  /// Removes one conversation entirely. The member may do this to their own; an
+  /// operator to any.
   Future<void> deleteSession(String sessionId) async {
-    final messages = await _messages(sessionId).get();
-
-    for (final m in messages.docs) {
-      final path = m.data()['audioPath'];
-      if (path is String && path.isNotEmpty) {
-        try {
-          await _storage.ref(path).delete();
-        } catch (e) {
-          // An already-deleted object must not block the transcript's deletion.
-          debugPrint('⚠️ Voice note already gone: $e');
-        }
-      }
-    }
-
-    // Batched: 500 is Firestore's limit, and a counselling session that ran
-    // long can pass it.
-    for (var i = 0; i < messages.docs.length; i += 400) {
-      final batch = _db.batch();
-      for (final m in messages.docs.skip(i).take(400)) {
-        batch.delete(m.reference);
-      }
-      await batch.commit();
-    }
-
-    await _sessions.doc(sessionId).delete();
+    await _api.delete('/api/counselling/sessions/$sessionId');
+    await _transcripts.remove(sessionId)?.dispose();
+    await refresh();
   }
 
-  // ─────────────────────────── admin alerts ───────────────────────────
-
-  /// Raises an alert in `admin_notifications`, which only an admin can read.
+  /// Retained so the screens that called it on open still compile.
   ///
-  /// Never allowed to throw into the caller: failing to notify the operator is
-  /// bad, but failing the member's payment submission because the alert write
-  /// was rejected would be worse.
-  Future<void> _alertAdmin({
-    required String type,
-    required String title,
-    required String body,
-  }) async {
-    try {
-      await _db.collection('admin_notifications').add({
-        'type': type,
-        'title': title,
-        'body': body,
-        'uid': _uid,
-        'createdAt': FieldValue.serverTimestamp(),
-        'read': false,
-      });
-    } catch (e) {
-      debugPrint('⚠️ Could not raise admin alert: $e');
+  /// It does nothing, and that is the point: expiry is a TTL index in MongoDB
+  /// now. Deleting expired sessions from the client was only ever necessary
+  /// because Firestore had no way to do it, and it meant the two-hour promise
+  /// depended on somebody opening the app.
+  Future<int> purgeExpired({bool asAdmin = false}) async {
+    debugPrint('▶ counselling: expiry is server-side; nothing to purge.');
+    return 0;
+  }
+
+  Future<void> dispose() async {
+    await _mine?.dispose();
+    await _all?.dispose();
+    for (final feed in _transcripts.values) {
+      await feed.dispose();
     }
+    _transcripts.clear();
+    _mine = null;
+    _all = null;
   }
 }

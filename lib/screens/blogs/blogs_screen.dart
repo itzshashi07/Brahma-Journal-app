@@ -6,7 +6,6 @@ import '../../providers/auth_provider.dart';
 import '../../services/blog_service.dart';
 import '../../services/moderation_service.dart';
 import '../../models/blog_post.dart';
-import '../../core/constants/app_constants.dart';
 import '../../core/constants/article_categories.dart';
 import '../../core/theme/app_theme.dart';
 
@@ -53,7 +52,6 @@ class _BlogsScreenState extends State<BlogsScreen> {
   /// safe to repeat (same slugs, merged), but not something to trigger by a
   /// stray tap.
   Future<void> _publishLibrary() async {
-    final auth = context.read<AuthProvider>();
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -82,10 +80,7 @@ class _BlogsScreenState extends State<BlogsScreen> {
 
     setState(() => _publishing = true);
     try {
-      final count = await _blogService.publishLibrary(
-        authorName: auth.profile?.displayName ?? 'Admin',
-        authorEmail: auth.user?.email ?? AppConstants.adminEmail,
-      );
+      final count = await _blogService.publishLibrary();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -458,9 +453,9 @@ class _BlogsScreenState extends State<BlogsScreen> {
 
   Widget _buildBlogCard(BlogPost blog, AuthProvider auth) {
     final hasLiked = auth.user != null && blog.likes.contains(auth.user!.uid);
-    final snippet = blog.content.length > 120
-        ? '${blog.content.substring(0, 120)}...'
-        : blog.content;
+    // The listing carries an excerpt rather than the article — see
+    // BlogPost.snippet, which reads whichever of the two is present.
+    final snippet = blog.snippet;
 
     final dateStr = DateFormat('dd MMM yyyy').format(blog.createdAt);
 
@@ -560,7 +555,7 @@ class _BlogsScreenState extends State<BlogsScreen> {
                           ),
                           onPressed: () {
                             if (auth.user != null) {
-                              _blogService.toggleLike(blog.id, auth.user!.uid);
+                              _blogService.toggleLike(blog.id, liked: hasLiked);
                             }
                           },
                         ),
@@ -610,7 +605,7 @@ class _BlogsScreenState extends State<BlogsScreen> {
                         size: 20,
                       ),
                       onPressed: () {
-                        _blogService.incrementShares(blog.id);
+                        _blogService.recordShare(blog.id);
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: const Text(

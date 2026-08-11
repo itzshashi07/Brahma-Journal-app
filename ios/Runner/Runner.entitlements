@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Push notifications.
+
+	  `development` is correct for debug and TestFlight builds; Xcode rewrites
+	  it to `production` when archiving for the App Store, so this value does
+	  not need to be changed by hand before a release.
+
+	  This file has to be referenced by the Runner target's CODE_SIGN_ENTITLEMENTS
+	  build setting to have any effect — creating it is not enough. See
+	  docs/FCM-SETUP.md, step 3.
+	-->
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>

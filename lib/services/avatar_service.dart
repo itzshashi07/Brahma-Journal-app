@@ -1,6 +1,5 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import '../core/constants/app_constants.dart';
 import '../core/constants/spiritual_avatars.dart';
+import 'api_service.dart';
 
 /// Profile avatar selection.
 ///
@@ -17,48 +16,39 @@ import '../core/constants/spiritual_avatars.dart';
 /// cost storage and invited abuse; picking one of eight presets costs nothing,
 /// so making members wait a month to change their mind would be friction with
 /// no purpose behind it.
+///
+/// The leaderboard mirror is gone too, and needs no replacement: the API
+/// updates the public row inside the same request that writes the profile, so
+/// the two cannot disagree and there is no best-effort second write to fail.
 class AvatarService {
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  final ApiService _api = ApiService();
 
-  /// Stores the chosen avatar on the profile and mirrors it onto the public
-  /// leaderboard row.
+  /// Stores the chosen avatar on the profile.
+  ///
+  /// The [uid] parameter is kept so existing call sites compile unchanged and
+  /// is deliberately unused — the server writes the profile belonging to the
+  /// ID token, so nobody can set somebody else's avatar.
   Future<void> selectAvatar({
-    required String uid,
+    String? uid,
     required String avatarId,
   }) async {
-    // Reject anything not in the catalogue, so a stale build or a tampered
-    // client cannot write an id the app will later fail to render.
+    // Rejected here as well as on the server, so a stale build fails with a
+    // message that names the problem rather than a 400 from the API.
     if (SpiritualAvatars.byId(avatarId) == null) {
       throw ArgumentError('Unknown avatar: $avatarId');
     }
 
-    await _db.collection(AppConstants.profilesCollection).doc(uid).set({
-      'avatarId': avatarId,
-      'avatarUpdatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-
-    // Best-effort: the avatar is already saved above, and a leaderboard write
-    // that fails should never surface as "could not change your avatar".
-    try {
-      await _db.collection(AppConstants.leaderboardCollection).doc(uid).set({
-        'avatarId': avatarId,
-      }, SetOptions(merge: true));
-    } catch (_) {
-      // The next stats sync rewrites the row.
-    }
+    await _api.patch('/api/profile/me', {'avatarId': avatarId});
   }
 
   /// Applies the default avatar for a gender, but never overwrites a choice the
   /// member has already made.
   Future<void> applyGenderDefaultIfUnset({
-    required String uid,
+    String? uid,
     required String? gender,
     required String? currentAvatarId,
   }) async {
     if (currentAvatarId != null && currentAvatarId.isNotEmpty) return;
-    await selectAvatar(
-      uid: uid,
-      avatarId: SpiritualAvatars.defaultFor(gender).id,
-    );
+    await selectAvatar(avatarId: SpiritualAvatars.defaultFor(gender).id);
   }
 }

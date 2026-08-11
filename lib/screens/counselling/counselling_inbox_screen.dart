@@ -198,6 +198,7 @@ class _CounsellingInboxScreenState extends State<CounsellingInboxScreen>
               service: _service,
               onOpenChat: () => _openChat(sessions[i]),
               onVerify: () => _verify(sessions[i]),
+              onApproveMeeting: () => _approveMeeting(sessions[i]),
             ),
     );
   }
@@ -217,6 +218,110 @@ class _CounsellingInboxScreenState extends State<CounsellingInboxScreen>
         ),
       ),
     );
+  }
+
+  /// Confirming a video call and issuing a room for it.
+  ///
+  /// The link is typed per session rather than pulled from a constant. The app
+  /// used to hand every member the same fixed Meet room the moment they chose
+  /// "video call", which meant anybody who had ever booked a call held a
+  /// working way into everybody else's — and it went out before a human had
+  /// agreed to be there at all.
+  Future<void> _approveMeeting(CounsellingSession session) async {
+    final ctrl = TextEditingController();
+    String? error;
+
+    final link = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          backgroundColor: AppTheme.bgCard,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppTheme.radiusLg)),
+          title: const Text('Confirm the call',
+              style: TextStyle(
+                  fontFamily: 'Outfit',
+                  fontSize: 17,
+                  color: AppTheme.textPrimary)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${session.name} is waiting. Create a room, then paste the '
+                'link — they will see it in the chat straight away.',
+                style: const TextStyle(
+                    fontFamily: 'Outfit',
+                    fontSize: 12.5,
+                    height: 1.45,
+                    color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: AppTheme.space3),
+              TextField(
+                controller: ctrl,
+                autofocus: true,
+                keyboardType: TextInputType.url,
+                style: const TextStyle(
+                    fontFamily: 'Outfit',
+                    fontSize: 14,
+                    color: AppTheme.textPrimary),
+                decoration: InputDecoration(
+                  hintText: 'https://meet.google.com/…',
+                  errorText: error,
+                  hintStyle: const TextStyle(
+                      fontFamily: 'Outfit',
+                      fontSize: 13,
+                      color: AppTheme.textMuted),
+                  filled: true,
+                  fillColor: Colors.white.withValues(alpha: 0.04),
+                  isDense: true,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+                    borderSide: const BorderSide(color: AppTheme.border),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () {
+                final v = ctrl.text.trim();
+                final uri = Uri.tryParse(v);
+                // Checked here as well as in the service: a typo means a member
+                // sits waiting for a call that cannot happen.
+                if (v.isEmpty ||
+                    uri == null ||
+                    !uri.isAbsolute ||
+                    !(uri.scheme == 'http' || uri.scheme == 'https')) {
+                  setLocal(() => error = 'Paste a full https:// link');
+                  return;
+                }
+                Navigator.pop(ctx, v);
+              },
+              child: const Text('Send link'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (link == null) return;
+    try {
+      await _service.approveMeeting(sessionId: session.id, link: link);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$e', style: const TextStyle(fontFamily: 'Outfit')),
+            backgroundColor: AppTheme.danger,
+          ),
+        );
+      }
+    }
   }
 
   /// The verification step, as its own sheet.
@@ -535,7 +640,7 @@ class _ChatRow extends StatelessWidget {
                 if (session.mode == CounsellingMode.meet)
                   IconButton(
                     tooltip: 'Join the call',
-                    onPressed: () => openMeet(context),
+                    onPressed: () => openMeet(context, session.meetLink),
                     icon: const Icon(Icons.videocam_outlined,
                         size: 19, color: AppTheme.accentLight),
                   ),
@@ -582,18 +687,23 @@ class _SessionTile extends StatelessWidget {
   final CounsellingService service;
   final VoidCallback onOpenChat;
   final VoidCallback onVerify;
+  final VoidCallback onApproveMeeting;
 
   const _SessionTile({
     required this.session,
     required this.service,
     required this.onOpenChat,
     required this.onVerify,
+    required this.onApproveMeeting,
   });
 
   Color get _statusColor => switch (session.status) {
         CounsellingStatus.paymentSubmitted => AppTheme.accent,
         CounsellingStatus.active => AppTheme.success,
         CounsellingStatus.approved => AppTheme.primaryLight,
+        // Amber like a payment waiting to be checked: both mean somebody is
+        // waiting on the operator to do something.
+        CounsellingStatus.meetRequested => AppTheme.accent,
         CounsellingStatus.rejected => Colors.redAccent,
         CounsellingStatus.ended => AppTheme.textMuted,
         CounsellingStatus.awaitingPayment => AppTheme.textSecondary,
@@ -603,6 +713,8 @@ class _SessionTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final needsVerification =
         session.status == CounsellingStatus.paymentSubmitted;
+    final needsMeetApproval =
+        session.status == CounsellingStatus.meetRequested;
 
     return Container(
       margin: const EdgeInsets.only(bottom: AppTheme.space3),
@@ -749,8 +861,17 @@ class _SessionTile extends StatelessWidget {
                 ),
                 const SizedBox(width: AppTheme.space3),
                 Expanded(
-                  flex: needsVerification ? 2 : 1,
-                  child: needsVerification
+                  flex: needsVerification || needsMeetApproval ? 2 : 1,
+                  child: needsMeetApproval
+                      // Takes priority over Verify: the payment is already
+                      // settled by the time a call can be requested, and this
+                      // is the person actually being kept waiting.
+                      ? SacredButton(
+                          label: 'Send link',
+                          icon: Icons.videocam_rounded,
+                          onTap: onApproveMeeting,
+                        )
+                      : needsVerification
                       ? SacredButton(
                           label: 'Verify',
                           icon: Icons.verified_outlined,
@@ -791,7 +912,7 @@ class _SessionTile extends StatelessWidget {
                 const Spacer(),
                 if (session.mode == CounsellingMode.meet)
                   TextButton.icon(
-                    onPressed: () => openMeet(context),
+                    onPressed: () => openMeet(context, session.meetLink),
                     style: TextButton.styleFrom(
                       minimumSize: Size.zero,
                       padding: const EdgeInsets.symmetric(

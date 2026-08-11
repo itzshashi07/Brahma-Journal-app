@@ -1,7 +1,6 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'backend_service.dart';
+import 'api_service.dart';
 import 'support_relay.dart';
 
 /// Outbound email.
@@ -71,20 +70,14 @@ class EmailService {
     required String category,
     required String message,
   }) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return false;
-
     try {
-      await FirebaseFirestore.instance.collection('support_tickets').add({
-        // Field names and bounds match the support_tickets rule exactly; the
-        // write is rejected otherwise.
-        'uid': user.uid,
-        'name': user.displayName ?? '',
-        'email': user.email ?? '',
+      // The identity comes off the verified ID token on the server, so uid,
+      // name and email are no longer sent — a ticket cannot be filed as
+      // somebody else. Bounds still clamp here as well as there, so an
+      // over-long message is trimmed rather than rejected outright.
+      await ApiService().post('/api/support/tickets', {
         'category': category.substring(0, category.length.clamp(0, 60)),
         'message': message.substring(0, message.length.clamp(0, 5000)),
-        'emailed': false,
-        'createdAt': FieldValue.serverTimestamp(),
       });
       return true;
     } catch (e) {

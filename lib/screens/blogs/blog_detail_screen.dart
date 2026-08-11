@@ -26,6 +26,11 @@ class _BlogDetailScreenState extends State<BlogDetailScreen> {
   final _commentCtrl = TextEditingController();
   BlogPost? _cachedBlog;
 
+  /// Held rather than re-created, because `FutureBuilder` re-runs its `future`
+  /// on every rebuild otherwise — and this widget rebuilds on every keystroke
+  /// in the comment box.
+  Future<BlogPost?>? _article;
+
   /// Reading language. English is the written original; Hinglish is the same
   /// article, not a machine translation, and is only offered where one exists.
   bool _hinglish = false;
@@ -52,21 +57,36 @@ class _BlogDetailScreenState extends State<BlogDetailScreen> {
       'Instagram: ${AppConstants.instagramUrl}',
       subject: title,
     );
-    await _blogService.incrementShares(blog.id);
+    await _blogService.recordShare(blog.id);
+  }
+
+  /// Likes or unlikes, then re-reads the article so the count on screen is the
+  /// server's rather than a guess.
+  ///
+  /// The Firestore listener used to push the new count back on its own. Nothing
+  /// does that now, so the refetch is the part that replaces it — and it is
+  /// also the part that makes the number right when two people tap at once.
+  Future<void> _toggleLike(BlogPost blog, bool liked) async {
+    try {
+      await _blogService.toggleLike(blog.id, liked: liked);
+      if (!mounted) return;
+      setState(() => _article = _blogService.byId(widget.blogId));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not register that: $e')),
+      );
+    }
   }
 
   Future<void> _postComment() async {
     if (_commentCtrl.text.trim().isEmpty) return;
 
-    final auth = context.read<AuthProvider>();
-    final commenterName = auth.profile?.name ?? 'Friend';
-    final commenterEmail = auth.user?.email ?? '';
-
     try {
+      // The commenter's name and email come off the verified token
+      // server-side, so there is nothing to pass and nothing to spoof.
       await _blogService.addComment(
         blogId: widget.blogId,
-        authorName: commenterName,
-        authorEmail: commenterEmail,
         content: _commentCtrl.text.trim(),
       );
       _commentCtrl.clear();
@@ -120,14 +140,18 @@ class _BlogDetailScreenState extends State<BlogDetailScreen> {
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
 
-    return StreamBuilder<List<BlogPost>>(
-      stream: _blogService.streamBlogs(),
+    // One article, by id.
+    //
+    // This used to subscribe to `streamBlogs()` — an open listener on the
+    // entire `blogs` collection, every document carrying its full text — and
+    // then search the result in Dart for the one id it wanted. Opening a single
+    // article downloaded the whole Sanctuary. The listing does not even carry
+    // article bodies any more, so fetching the one being read is both cheaper
+    // and the only way to get the text at all.
+    return FutureBuilder<BlogPost?>(
+      future: _article ??= _blogService.byId(widget.blogId),
       builder: (context, snapshot) {
-        if (snapshot.hasData) {
-          try {
-            _cachedBlog = snapshot.data!.firstWhere((b) => b.id == widget.blogId);
-          } catch (_) {}
-        }
+        if (snapshot.data != null) _cachedBlog = snapshot.data;
 
         if (_cachedBlog == null) {
           return Scaffold(
@@ -442,11 +466,9 @@ class _BlogDetailScreenState extends State<BlogDetailScreen> {
                                   color: hasLiked ? Colors.redAccent : AppTheme.textMuted,
                                   size: 22,
                                 ),
-                                onPressed: () {
-                                  if (auth.user != null) {
-                                    _blogService.toggleLike(blog.id, auth.user!.uid);
-                                  }
-                                },
+                                onPressed: auth.user == null
+                                    ? null
+                                    : () => _toggleLike(blog, hasLiked),
                               ),
                               Text(
                                 '${blog.likes.length} Likes',

@@ -1,7 +1,8 @@
 import 'dart:convert';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
+
+import 'api_service.dart';
 import 'package:http/http.dart' as http;
 
 /// Delivers a support ticket to an external mail relay.
@@ -35,12 +36,13 @@ import 'package:http/http.dart' as http;
 class SupportRelay {
   static Future<Map<String, dynamic>?> _config() async {
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('app_config')
-          .doc('support')
-          .get();
-      if (!doc.exists) return null;
-      final data = doc.data()!;
+      // Same document, now served by the Node.js API from MongoDB. A missing
+      // key answers 404, which ApiService raises — caught below and treated as
+      // "no relay configured", which is the truthful reading.
+      final body = await ApiService().get('/api/support/config/support');
+      final value = body?['value'];
+      if (value is! Map) return null;
+      final data = Map<String, dynamic>.from(value);
       if (data['enabled'] != true) return null;
       final url = (data['url'] as String?)?.trim();
       if (url == null || url.isEmpty) return null;

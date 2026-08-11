@@ -1,4 +1,4 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'api_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:share_plus/share_plus.dart';
@@ -54,16 +54,19 @@ class AppUpdateService {
     final build = await currentBuild();
 
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('app_config')
-          .doc('version')
-          .get();
+      // Served by the Node.js API from MongoDB. The endpoint 404s when no
+      // release has been published, which ApiService raises as an
+      // ApiException — caught below and reported as "no update", which is the
+      // truthful answer rather than an error.
+      final body = await ApiService().get('/api/support/config/version');
+      final data = body?['value'];
 
-      if (!doc.exists) {
+      if (data is! Map) {
         return UpdateStatus(currentVersion: version, currentBuild: build);
       }
 
-      final release = AppRelease.fromMap(doc.data()!, defaultDownloadLink);
+      final release =
+          AppRelease.fromMap(Map<String, dynamic>.from(data), defaultDownloadLink);
       return UpdateStatus(
         currentVersion: version,
         currentBuild: build,
@@ -132,21 +135,24 @@ class AppUpdateService {
     int? fileSizeBytes,
   }) async {
     final info = await _packageInfo();
-    await FirebaseFirestore.instance
-        .collection('app_config')
-        .doc('version')
-        .set({
-      'latest_version': info.version,
-      'latest_build': int.tryParse(info.buildNumber) ?? 0,
-      'release_notes': releaseNotes,
-      'force_update': forceUpdate,
-      'download_url': downloadUrl?.trim().isNotEmpty == true
-          ? downloadUrl!.trim()
-          : defaultDownloadLink,
-      if (fileSizeBytes != null) 'file_size_bytes': fileSizeBytes,
-      'released_at': FieldValue.serverTimestamp(),
-      'updated_at': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    final now = DateTime.now().toUtc().toIso8601String();
+
+    // Admin-gated on the server. `force_update` puts a blocking banner on every
+    // device, so it is not a value the API takes from just any caller.
+    await ApiService().put('/api/support/config/version', {
+      'value': {
+        'latest_version': info.version,
+        'latest_build': int.tryParse(info.buildNumber) ?? 0,
+        'release_notes': releaseNotes,
+        'force_update': forceUpdate,
+        'download_url': downloadUrl?.trim().isNotEmpty == true
+            ? downloadUrl!.trim()
+            : defaultDownloadLink,
+        if (fileSizeBytes != null) 'file_size_bytes': fileSizeBytes,
+        'released_at': now,
+        'updated_at': now,
+      },
+    });
   }
 
   static Future<void> shareApp() async {

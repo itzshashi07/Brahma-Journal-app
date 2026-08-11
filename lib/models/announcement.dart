@@ -34,6 +34,17 @@ class Announcement {
     );
   }
 
+  /// Built from the Node.js API's JSON.
+  factory Announcement.fromJson(Map<String, dynamic> data) {
+    return Announcement(
+      id: data['_id']?.toString() ?? '',
+      title: data['title'] ?? '',
+      content: data['content'] ?? '',
+      authorName: data['authorName'] ?? 'Admin',
+      createdAt: _parseDateTime(data['createdAt']),
+    );
+  }
+
   Map<String, dynamic> toMap() {
     return {
       'title': title,

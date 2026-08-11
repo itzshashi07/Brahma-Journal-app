@@ -55,6 +55,21 @@
 			</array>
 		</dict>
 	</dict>
+	<!-- Remote notifications. `remote-notification` is what lets a data-only
+	     FCM message wake the app in the background; without it iOS delivers
+	     data messages only while the app is in the foreground, which is
+	     precisely the limitation FCM was adopted to remove. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+	<!-- Defer registering for remote notifications until Dart asks. The
+	     firebase_messaging plugin calls registerForRemoteNotifications itself
+	     once permission is granted; letting the platform also do it at launch
+	     produces a permission prompt before the app has explained why it wants
+	     one. -->
+	<key>FirebaseAppDelegateProxyEnabled</key>
+	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

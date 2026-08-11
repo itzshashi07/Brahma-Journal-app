@@ -1,7 +1,7 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'api_service.dart';
 
 /// Reporting, blocking and hiding.
 ///
@@ -27,9 +27,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// Reports go to an admin queue either way, and a report always carries enough
 /// context for a human to find the thing being complained about.
 class ModerationService {
-  final _db = FirebaseFirestore.instance;
-
-  String? get _uid => FirebaseAuth.instance.currentUser?.uid;
 
   // ─────────────────────────── reporting ───────────────────────────
 
@@ -65,15 +62,12 @@ class ModerationService {
     String? reportedUid,
     String note = '',
   }) async {
-    final uid = _uid;
-    if (uid == null) return false;
-
     try {
-      // Deterministic id: one report per person per item. Someone tapping
-      // report twice is not two complaints, and it stops the queue being
-      // flooded from a single account.
-      await _db.collection('content_reports').doc('${uid}_$contentId').set({
-        'reporterUid': uid,
+      // The server upserts on (reporter, content), so a second tap updates the
+      // first report rather than filing a duplicate — one person reporting one
+      // thing twice is not two complaints. The reporter comes off the verified
+      // token, so a report cannot be filed in somebody else's name.
+      await ApiService().post('/api/support/reports', {
         'contentKind': contentKind,
         'contentId': contentId,
         if (parentId != null) 'parentId': parentId,
@@ -81,8 +75,6 @@ class ModerationService {
         'reason': reason,
         'note': note.trim(),
         'excerpt': excerpt.length > 1000 ? excerpt.substring(0, 1000) : excerpt,
-        'status': 'open',
-        'createdAt': FieldValue.serverTimestamp(),
       });
       return true;
     } catch (e) {
@@ -92,70 +84,65 @@ class ModerationService {
   }
 
   /// The admin queue, newest first.
-  Stream<List<ContentReport>> streamOpenReports() => _db
-      .collection('content_reports')
-      .where('status', isEqualTo: 'open')
-      .snapshots()
-      .map((s) {
-        final list = s.docs.map(ContentReport.fromDoc).toList();
-        // Sorted here rather than by Firestore: `where` + `orderBy` needs a
-        // composite index, and a missing index fails the query outright — which
-        // would leave the moderator staring at an empty queue.
-        list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-        return list;
-      });
+  ///
+  /// A `Future` rather than a live stream: MongoDB has no client-side realtime
+  /// channel, and the operator now learns about a report through FCM the moment
+  /// it is filed rather than by keeping a listener open. The pull-to-refresh
+  /// the screen already has covers the rest.
+  Future<List<ContentReport>> openReports() async {
+    try {
+      final body = await ApiService()
+          .get('/api/support/reports', query: {'status': 'open'});
+      final list = (body?['reports'] as List? ?? const []);
+      return list
+          .map((r) => ContentReport.fromJson(Map<String, dynamic>.from(r as Map)))
+          .toList();
+    } catch (e) {
+      debugPrint('⚠️ Report queue unavailable: $e');
+      return const [];
+    }
+  }
+
+  /// Kept so existing StreamBuilder call sites compile unchanged.
+  Stream<List<ContentReport>> streamOpenReports() =>
+      Stream.fromFuture(openReports());
 
   /// Marks a report handled. [outcome] is recorded so a pattern of complaints
   /// about the same person is visible later.
   Future<void> resolveReport(String reportId, String outcome) async {
-    await _db.collection('content_reports').doc(reportId).update({
+    await ApiService().patch('/api/support/reports/$reportId', {
       'status': 'resolved',
       'outcome': outcome,
-      'resolvedAt': FieldValue.serverTimestamp(),
     });
   }
 
   // ─────────────────────────── blocking ───────────────────────────
 
-  CollectionReference<Map<String, dynamic>> _blocks(String uid) =>
-      _db.collection('blocks').doc(uid).collection('users');
-
-  /// Stops [blockedUid]'s articles and comments reaching this member.
-  ///
-  /// Stored under the blocker's own document, readable only by them: who you
-  /// have blocked is nobody else's business, and telling the blocked person
-  /// would turn a quiet exit into a confrontation.
   Future<void> blockUser(String blockedUid) async {
-    final uid = _uid;
-    if (uid == null || blockedUid.isEmpty || blockedUid == uid) return;
-    await _blocks(uid).doc(blockedUid).set({
-      'blockedAt': FieldValue.serverTimestamp(),
-    });
+    await ApiService().post('/api/community/blocks/$blockedUid');
   }
 
   Future<void> unblockUser(String blockedUid) async {
-    final uid = _uid;
-    if (uid == null) return;
-    await _blocks(uid).doc(blockedUid).delete().catchError((_) {});
+    await ApiService().delete('/api/community/blocks/$blockedUid');
   }
 
-  /// Live set of uids this member has blocked. Feeds filter against it.
-  Stream<Set<String>> blockedUids() {
-    final uid = _uid;
-    if (uid == null) return Stream.value(const {});
-    return _blocks(uid).snapshots().map((s) => s.docs.map((d) => d.id).toSet());
-  }
-
+  /// The uids this member has blocked.
+  ///
+  /// Feeds filter against this. It is also applied server-side — the board
+  /// endpoint excludes blocked authors before it answers — so a blocked post
+  /// never reaches the device even if this set is stale.
   Future<Set<String>> blockedUidsOnce() async {
-    final uid = _uid;
-    if (uid == null) return const {};
     try {
-      final snap = await _blocks(uid).get();
-      return snap.docs.map((d) => d.id).toSet();
+      final body = await ApiService().get('/api/community/blocks');
+      final list = (body?['blocked'] as List? ?? const []);
+      return list.map((e) => e.toString()).toSet();
     } catch (e) {
       return const {};
     }
   }
+
+  /// Kept so existing StreamBuilder call sites compile unchanged.
+  Stream<Set<String>> blockedUids() => Stream.fromFuture(blockedUidsOnce());
 
   // ─────────────────────── hiding anonymous posts ───────────────────────
   //
@@ -210,11 +197,9 @@ class ContentReport {
     required this.createdAt,
   });
 
-  factory ContentReport.fromDoc(
-      QueryDocumentSnapshot<Map<String, dynamic>> doc) {
-    final d = doc.data();
+  factory ContentReport.fromJson(Map<String, dynamic> d) {
     return ContentReport(
-      id: doc.id,
+      id: d['_id']?.toString() ?? '',
       reporterUid: d['reporterUid'] ?? '',
       contentKind: d['contentKind'] ?? '',
       contentId: d['contentId'] ?? '',
@@ -223,7 +208,8 @@ class ContentReport {
       reason: d['reason'] ?? '',
       note: d['note'] ?? '',
       excerpt: d['excerpt'] ?? '',
-      createdAt: (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      createdAt:
+          DateTime.tryParse(d['createdAt']?.toString() ?? '') ?? DateTime.now(),
     );
   }
 

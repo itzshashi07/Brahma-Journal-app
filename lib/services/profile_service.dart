@@ -1,8 +1,7 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
+
 import '../models/user_profile.dart';
-import '../core/constants/app_constants.dart';
-import '../core/utils/stats_utils.dart';
-import 'streak_service.dart';
+import 'api_service.dart';
 
 /// The stats that back the dashboard cards and the community leaderboard.
 class UserStats {
@@ -19,253 +18,115 @@ class UserStats {
     this.totalMeditationSeconds = 0,
     this.lastActiveAt,
   });
+
+  factory UserStats.fromJson(Map<String, dynamic> data) => UserStats(
+        streak: (data['streak'] as num?)?.toInt() ?? 0,
+        longestStreak: (data['longestStreak'] as num?)?.toInt() ?? 0,
+        totalJournalEntries: (data['totalJournalEntries'] as num?)?.toInt() ?? 0,
+        totalMeditationSeconds:
+            (data['totalMeditationSeconds'] as num?)?.toInt() ?? 0,
+        lastActiveAt: data['lastActiveAt'] == null
+            ? null
+            : DateTime.tryParse(data['lastActiveAt'].toString()),
+      );
 }
 
+/// Profiles and the public leaderboard, served by the Node.js API.
+///
+/// ─────────────────────────────────────────────────────────────────────────
+/// What the server took over
+///
+/// `syncProfileStats` used to run here: it read every entry and every
+/// meditation session, computed the streak, and wrote both the profile and the
+/// member's leaderboard row from the device. That is now one request. The
+/// numbers on the public board are derived from the records the member
+/// actually has, in the process that stores them, so a self-reported score is
+/// no longer possible.
+///
+/// `rebuildLeaderboard` is gone entirely and needs no replacement. It existed
+/// because leaderboard rows were written by their owner's device, so a member
+/// who had not opened the app since the board was introduced simply was not on
+/// it — and a Cloud Function that would have fixed that needs the Blaze plan.
+/// Rows are now written server-side on every sync, so the board cannot fall
+/// behind in that way.
+///
+/// The PII split survives the move and is worth restating: /leaderboard was a
+/// deliberately PII-free projection because reading /profiles wholesale would
+/// have exposed the name, email, phone and age of the entire user base. The API
+/// keeps that separation — the leaderboard endpoint returns display names and
+/// counters, and a profile fetched for anyone but the caller is an allowlist of
+/// the same handful of fields.
 class ProfileService {
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  final ApiService _api = ApiService();
+
+  /// Minutes east of UTC. A streak is a fact about the member's calendar, and
+  /// the server runs in UTC — without this, someone in IST journalling after
+  /// midnight has it filed as yesterday.
+  int get _tzOffsetMinutes => DateTime.now().timeZoneOffset.inMinutes;
 
   Future<void> saveProfile(UserProfile profile) async {
-    try {
-      await _db.collection(AppConstants.profilesCollection).doc(profile.uid).set({
-        ...profile.toMap(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    } catch (e) {
-      rethrow;
-    }
+    await _api.patch('/api/profile/me', profile.toJson());
   }
 
-  Future<UserProfile?> getProfile(String uid) async {
+  /// A profile by uid. Omit [uid] — or pass the caller's own — for the full
+  /// record; anyone else's returns the public card.
+  Future<UserProfile?> getProfile([String? uid]) async {
     try {
-      final doc = await _db.collection(AppConstants.profilesCollection).doc(uid).get();
-      if (doc.exists) {
-        return UserProfile.fromFirestore(uid, doc.data()!);
-      }
-      return null;
+      final body = await _api.get(uid == null ? '/api/profile/me' : '/api/profile/$uid');
+      final data = body?['profile'];
+      if (data == null) return null;
+      return UserProfile.fromJson(Map<String, dynamic>.from(data as Map));
     } catch (e) {
-      print('❌ getProfile error: $e');
+      debugPrint('❌ getProfile failed: $e');
       return null;
     }
   }
 
   /// Public ranking rows for the Community screen.
-  ///
-  /// This used to read every document in /profiles, which meant any signed-in
-  /// member could pull the name, email address, phone number, age and payment
-  /// history of the entire user base. The leaderboard only ever needed a
-  /// display name and some counters, so those now live in /leaderboard — a
-  /// deliberately PII-free projection — and /profiles becomes owner-only.
-  ///
-  /// Reads /leaderboard, falling back to /profiles when that read is refused.
-  ///
-  /// The fallback exists because the app and the security rules deploy
-  /// separately: a build carrying this code can reach a project still running
-  /// the old rules, where /leaderboard does not exist as far as the rules are
-  /// concerned and every read is denied. Without the fallback the Community
-  /// screen is simply broken in that window.
-  ///
-  /// The distinction is deliberate — an *empty* /leaderboard is a real answer
-  /// and is used as-is (it fills in as members open the app), whereas a
-  /// *refused* read means the new rules are not live yet.
-  Future<List<UserProfile>> getLeaderboard() async {
-    try {
-      final snapshot =
-          await _db.collection(AppConstants.leaderboardCollection).get();
-      return snapshot.docs
-          .map((doc) => UserProfile.fromFirestore(doc.id, doc.data()))
-          .toList();
-    } catch (e) {
-      print('ℹ️ /leaderboard unavailable ($e) — falling back to /profiles');
-    }
-
-    try {
-      final snapshot = await _db.collection(AppConstants.profilesCollection).get();
-      return snapshot.docs
-          .map((doc) => UserProfile.fromFirestore(doc.id, doc.data()))
-          .toList();
-    } catch (e) {
-      print('❌ getLeaderboard: both sources failed: $e');
-      rethrow;
-    }
+  Future<List<UserProfile>> getLeaderboard({String sortBy = 'meditation'}) async {
+    final body = await _api.get('/api/practice/leaderboard', query: {
+      'sortBy': sortBy == 'streak' ? 'streak' : 'totalMeditationSeconds',
+      'limit': '100',
+    });
+    final rows = (body?['leaderboard'] as List? ?? const []);
+    return rows
+        .map((r) => UserProfile.fromJson(Map<String, dynamic>.from(r as Map)))
+        .toList();
   }
 
-  /// Rebuilds every member's public leaderboard row from their profile.
+  /// Admin only: rebuild every member's public row from their own records.
   ///
-  /// Admin only — and it exists because leaderboard rows are written by their
-  /// owner's device. A member who has not opened the app since /leaderboard was
-  /// introduced simply is not on the board, which makes the Community screen
-  /// look broken even though nothing is. A Cloud Function trigger would keep
-  /// this current automatically; that needs the Blaze plan, so until then an
-  /// operator can rebuild the board on demand.
-  ///
-  /// Copies only what the Community screen renders. The counters come from each
-  /// profile as last synced by its owner, so they are as fresh as that member's
-  /// last visit — accurate, not invented.
+  /// Rows are written on each member's own sync, so the board keeps itself
+  /// current and this is not part of the routine — it earns its place right
+  /// after the Firestore migration, and any time the totals should be
+  /// re-derived from source rather than trusted.
   ///
   /// Returns how many rows were written.
   Future<int> rebuildLeaderboard() async {
-    final profiles = await _db.collection(AppConstants.profilesCollection).get();
-    var written = 0;
-
-    // Batched: one write per member would be dozens of round trips, and a
-    // partial rebuild is worse than none.
-    var batch = _db.batch();
-    var inBatch = 0;
-
-    for (final doc in profiles.docs) {
-      final p = UserProfile.fromFirestore(doc.id, doc.data());
-      final row = _db.collection(AppConstants.leaderboardCollection).doc(doc.id);
-
-      batch.set(row, {
-        'uid': doc.id,
-        'displayName': p.displayName,
-        if (p.avatarId != null) 'avatarId': p.avatarId,
-        'streak': p.streak,
-        'longestStreak': p.longestStreak,
-        'totalJournalEntries': p.totalJournalEntries,
-        'totalMeditationSeconds': p.totalMeditationSeconds,
-        if (p.lastActiveAt != null)
-          'lastActiveAt': Timestamp.fromDate(p.lastActiveAt!),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      written++;
-      inBatch++;
-      // Firestore caps a batch at 500 operations.
-      if (inBatch >= 400) {
-        await batch.commit();
-        batch = _db.batch();
-        inBatch = 0;
-      }
-    }
-
-    if (inBatch > 0) await batch.commit();
-    return written;
+    final body = await _api.post('/api/practice/leaderboard/rebuild');
+    return (body?['written'] as num?)?.toInt() ?? 0;
   }
 
-  /// Recomputes a user's streak / entry count / meditation total from their raw
-  /// documents and writes them onto the profile doc, which is what the
-  /// community leaderboard reads.
+  /// Recomputes this member's stats server-side and returns them.
   ///
-  /// Each source is computed independently so a failure in one (permissions,
-  /// offline) leaves the other stats — and the previously stored values —
-  /// intact instead of overwriting the profile with zeros.
-  Future<UserStats?> syncProfileStats(String uid) async {
-    final updates = <String, dynamic>{};
-    int? streak;
-    int? longestStreak;
-    int? entriesCount;
-    int? totalSeconds;
-    DateTime? lastActiveAt;
-
-    // Days this member has spent a streak recovery on. They count towards the
-    // streak and towards `lastActiveAt` — otherwise a repaired streak would
-    // still age out to zero on the leaderboard, which is the one place the
-    // recovery was bought to show up — but deliberately not towards
-    // `totalJournalEntries`. Nothing is invented; one day is forgiven.
-    final recoveredDays = await StreakService().recoveredDays(uid);
-
-    // 1. Journal entries → streak + total entries.
+  /// The [uid] parameter is kept so existing call sites compile unchanged and
+  /// is deliberately unused — the server syncs whoever the ID token belongs to.
+  /// Nobody can trigger a recompute of somebody else's numbers.
+  ///
+  /// Returns null when the server had nothing to compute. Never throws: a
+  /// failed sync leaves the stored numbers as they were, which is the same
+  /// tolerance the Firestore version had.
+  Future<UserStats?> syncProfileStats([String? uid]) async {
     try {
-      final entriesQ = await _db
-          .collection(AppConstants.entriesCollection)
-          .where('uid', isEqualTo: uid)
-          .get();
-
-      final entryDates = <DateTime>[];
-      for (final doc in entriesQ.docs) {
-        final date = parseFirestoreDate(doc.data()['createdAt']) ??
-            parseFirestoreDate(doc.data()['clientCreatedAt']);
-        if (date != null) entryDates.add(date);
-      }
-
-      entriesCount = entriesQ.docs.length;
-      final streakDates = [...entryDates, ...recoveredDays];
-      streak = streakFromDates(streakDates);
-      longestStreak = longestStreakFromDates(streakDates);
-      updates['longestStreak'] = longestStreak;
-      for (final d in streakDates) {
-        final latest = lastActiveAt;
-        if (latest == null || d.isAfter(latest)) lastActiveAt = d;
-      }
-
-      updates['streak'] = streak;
-      updates['totalJournalEntries'] = entriesCount;
+      final body = await _api.post('/api/profile/me/sync-stats', {
+        'tzOffsetMinutes': _tzOffsetMinutes,
+      });
+      final stats = body?['stats'];
+      if (stats == null) return null;
+      return UserStats.fromJson(Map<String, dynamic>.from(stats as Map));
     } catch (e) {
-      print('❌ syncProfileStats: entries query failed: $e');
+      debugPrint('❌ syncProfileStats failed: $e');
+      return null;
     }
-
-    // 2. Meditation sessions → total seconds.
-    try {
-      final sessionsQ = await _db
-          .collection(AppConstants.meditationSessionsCollection)
-          .where('uid', isEqualTo: uid)
-          .get();
-
-      var seconds = 0;
-      for (final doc in sessionsQ.docs) {
-        seconds += parseIntField(doc.data()['duration']);
-        final date = parseFirestoreDate(doc.data()['createdAt']) ??
-            parseFirestoreDate(doc.data()['clientCreatedAt']);
-        final latest = lastActiveAt;
-        if (date != null && (latest == null || date.isAfter(latest))) {
-          lastActiveAt = date;
-        }
-      }
-
-      totalSeconds = seconds;
-      updates['totalMeditationSeconds'] = seconds;
-    } catch (e) {
-      print('❌ syncProfileStats: meditation query failed: $e');
-    }
-
-    if (updates.isEmpty) return null;
-
-    if (lastActiveAt != null) {
-      updates['lastActiveAt'] = Timestamp.fromDate(lastActiveAt);
-    }
-    updates['updatedAt'] = FieldValue.serverTimestamp();
-
-    try {
-      // set(merge) rather than update(): a profile doc that was never written
-      // makes update() throw not-found, which is why new members showed up on
-      // the leaderboard with no streak at all.
-      await _db
-          .collection(AppConstants.profilesCollection)
-          .doc(uid)
-          .set(updates, SetOptions(merge: true));
-    } catch (e) {
-      print('❌ syncProfileStats: profile write failed: $e');
-    }
-
-    // Mirror the non-sensitive counters into the public ranking collection.
-    // Deliberately no email, phone, age or gender — /leaderboard is readable by
-    // every signed-in member, so only what the Community screen renders goes in.
-    // A Cloud Function recomputes this row from the underlying documents on the
-    // member's next entry or session, so a self-reported value cannot persist.
-    try {
-      final profile = await getProfile(uid);
-      await _db.collection(AppConstants.leaderboardCollection).doc(uid).set({
-        'uid': uid,
-        'displayName': (profile?.displayName ?? 'Friend'),
-        if (profile?.avatarId != null) 'avatarId': profile!.avatarId,
-        'streak': streak ?? 0,
-        'longestStreak': longestStreak ?? 0,
-        'totalJournalEntries': entriesCount ?? 0,
-        'totalMeditationSeconds': totalSeconds ?? 0,
-        if (lastActiveAt != null) 'lastActiveAt': Timestamp.fromDate(lastActiveAt),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    } catch (e) {
-      print('❌ syncProfileStats: leaderboard write failed: $e');
-    }
-
-    return UserStats(
-      streak: streak ?? 0,
-      longestStreak: longestStreak ?? 0,
-      totalJournalEntries: entriesCount ?? 0,
-      totalMeditationSeconds: totalSeconds ?? 0,
-      lastActiveAt: lastActiveAt,
-    );
   }
 }

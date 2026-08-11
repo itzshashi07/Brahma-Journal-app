@@ -1,8 +1,8 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/constants/thoughts_365.dart';
 import '../../core/theme/app_theme.dart';
+import '../../services/api_service.dart';
 import '../../widgets/sacred.dart';
 
 /// How an admin sets the thought of the day.
@@ -55,12 +55,13 @@ class _ThoughtPickerSheetState extends State<ThoughtPickerSheet>
     if (trimmed.isEmpty) return;
     setState(() => _saving = true);
     try {
-      await FirebaseFirestore.instance
-          .collection('metadata')
-          .doc('thought_of_the_day')
-          .set({
-        'text': trimmed,
-        'updatedAt': FieldValue.serverTimestamp(),
+      // Through the API rather than straight into the collection. `/metadata`
+      // had to be client-writable for this one screen, and a Firestore rule
+      // can say "an admin may write here" but not "an admin may write this key
+      // with this shape". The endpoint is admin-gated *and* validates, and it
+      // drops the server's cached copy so the change is live at once.
+      await ApiService().put('/api/support/metadata/thought_of_the_day', {
+        'value': {'text': trimmed},
       });
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
@@ -83,10 +84,12 @@ class _ThoughtPickerSheetState extends State<ThoughtPickerSheet>
   Future<void> _resetToAutomatic() async {
     setState(() => _saving = true);
     try {
-      await FirebaseFirestore.instance
-          .collection('metadata')
-          .doc('thought_of_the_day')
-          .delete();
+      // Cleared rather than deleted. The endpoint upserts, so there is no
+      // delete verb to reach for — and an empty string is what the dashboard
+      // already treats as "no override", falling back to the day-of-year line.
+      await ApiService().put('/api/support/metadata/thought_of_the_day', {
+        'value': {'text': ''},
+      });
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {

@@ -142,6 +142,64 @@ class JournalEntry {
     );
   }
 
+  /// Builds an entry from the Node.js API's JSON.
+  ///
+  /// Two shape differences from Firestore, and both are load-bearing:
+  ///
+  ///   * the document id is `_id`, not `doc.id`
+  ///   * dates arrive as ISO 8601 strings, not `Timestamp` objects
+  ///
+  /// [_parseDateTime] already understands strings, so it is reused rather than
+  /// duplicated — one place decides what a date is.
+  ///
+  /// There is no `clientCreatedAt` fallback here and none is needed. That field
+  /// existed because a Firestore `serverTimestamp()` reads back as null until
+  /// the write is acknowledged, so an entry written offline had no date at all
+  /// and silently dropped out of the streak. The API stamps `createdAt` before
+  /// it answers, so anything this parses already has one.
+  factory JournalEntry.fromJson(Map<String, dynamic> data) {
+    return JournalEntry(
+      id: data['_id']?.toString(),
+      uid: data['firebaseUid'] ?? '',
+      mood: _parseMood(data['mood']),
+      newHabit: data['newHabit'] ?? '',
+      tinyStep: data['tinyStep'] ?? '',
+      badHabit: data['badHabit'] ?? '',
+      affirmations: data['affirmations'] ?? '',
+      visualization: data['visualization'] ?? '',
+      nightRoutine: data['nightRoutine'] ?? '',
+      triggerThought: data['triggerThought'] ?? '',
+      triggerResponse: data['triggerResponse'] ?? '',
+      bestMoment: data['bestMoment'] ?? '',
+      shivBabaLine: data['shivBabaLine'] ?? '',
+      sleepReflection: data['sleepReflection'] ?? '',
+      energyLevel: data['energyLevel'] ?? '',
+      practices: List<String>.from(data['practices'] ?? const []),
+      influences: List<String>.from(data['influences'] ?? const []),
+      habitsDone: List<String>.from(data['habitsDone'] ?? const []),
+      challenges: List<String>.from(data['challenges'] ?? const []),
+      checkIn: Map<String, String>.from(data['checkIn'] ?? const {}),
+      craftDone: List<String>.from(data['craftDone'] ?? const []),
+      craftMinutes:
+          data['craftMinutes'] is num ? (data['craftMinutes'] as num).toInt() : 0,
+      createdAt: _parseDateTime(data['createdAt'], DateTime.now()),
+      updatedAt:
+          data['updatedAt'] != null ? _parseDateTime(data['updatedAt'], DateTime.now()) : null,
+    );
+  }
+
+  /// The body this entry is sent to the API as.
+  ///
+  /// Deliberately omits `uid`: the server takes the owner from the verified
+  /// Firebase ID token, and a client-supplied uid would be a client-supplied
+  /// authorization decision. It is rejected there; leaving it out here makes
+  /// that contract visible from this side too.
+  Map<String, dynamic> toJson() {
+    final map = toMap();
+    map.remove('uid');
+    return map;
+  }
+
   Map<String, dynamic> toMap() {
     return {
       'uid': uid,

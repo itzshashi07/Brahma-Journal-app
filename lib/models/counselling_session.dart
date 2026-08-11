@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 /// Where a counselling request has got to.
 ///
 /// The order is the order a session actually moves through, so `index` can be
@@ -15,6 +13,16 @@ enum CounsellingStatus {
   /// Payment confirmed. The member now chooses call or chat.
   approved,
 
+  /// The member asked for a video call and is waiting for the counsellor to
+  /// confirm a time and issue a room.
+  ///
+  /// This state exists because a call needs a human at both ends. The old flow
+  /// handed out the room the instant the member picked "video call", so they
+  /// could join at 3am and sit alone in an empty room believing they had been
+  /// stood up. Nothing is issued now until somebody has actually agreed to be
+  /// there.
+  meetRequested,
+
   /// The session is running.
   active,
 
@@ -27,6 +35,7 @@ enum CounsellingStatus {
   static CounsellingStatus parse(String? raw) => switch (raw) {
         'payment_submitted' => CounsellingStatus.paymentSubmitted,
         'approved' => CounsellingStatus.approved,
+        'meet_requested' => CounsellingStatus.meetRequested,
         'active' => CounsellingStatus.active,
         'ended' => CounsellingStatus.ended,
         'rejected' => CounsellingStatus.rejected,
@@ -37,6 +46,7 @@ enum CounsellingStatus {
         CounsellingStatus.awaitingPayment => 'awaiting_payment',
         CounsellingStatus.paymentSubmitted => 'payment_submitted',
         CounsellingStatus.approved => 'approved',
+        CounsellingStatus.meetRequested => 'meet_requested',
         CounsellingStatus.active => 'active',
         CounsellingStatus.ended => 'ended',
         CounsellingStatus.rejected => 'rejected',
@@ -46,6 +56,7 @@ enum CounsellingStatus {
         CounsellingStatus.awaitingPayment => 'Awaiting payment',
         CounsellingStatus.paymentSubmitted => 'Payment to verify',
         CounsellingStatus.approved => 'Approved — choosing format',
+        CounsellingStatus.meetRequested => 'Call requested',
         CounsellingStatus.active => 'Session live',
         CounsellingStatus.ended => 'Ended',
         CounsellingStatus.rejected => 'Payment rejected',
@@ -93,6 +104,15 @@ class CounsellingSession {
   final CounsellingStatus status;
   final CounsellingMode mode;
 
+  /// The video room for THIS session, issued by the counsellor when they
+  /// approve the call.
+  ///
+  /// Deliberately a field rather than the constant it used to be. One hardcoded
+  /// room shared by every session meant any member with an approved session
+  /// held a working link into somebody else's counselling call — the single
+  /// worst confidentiality failure available in this app.
+  final String meetLink;
+
   // Payment, as reported by the member and verified by hand.
   final String paymentMode;
   final String transactionId;
@@ -127,6 +147,7 @@ class CounsellingSession {
     this.details = '',
     this.status = CounsellingStatus.awaitingPayment,
     this.mode = CounsellingMode.undecided,
+    this.meetLink = '',
     this.paymentMode = '',
     this.transactionId = '',
     this.amount = 0,
@@ -138,17 +159,15 @@ class CounsellingSession {
     this.lastMessageBy,
   });
 
-  static DateTime? _date(dynamic v) {
-    if (v is Timestamp) return v.toDate();
-    if (v is String) return DateTime.tryParse(v);
-    return null;
-  }
+  /// The API speaks ISO 8601. Firestore spoke `Timestamp`, which is why this
+  /// used to sniff the type — there is only one wire format now.
+  static DateTime? _date(dynamic v) =>
+      v is String ? DateTime.tryParse(v) : null;
 
-  factory CounsellingSession.fromDoc(DocumentSnapshot doc) {
-    final d = (doc.data() as Map<String, dynamic>?) ?? const {};
+  factory CounsellingSession.fromJson(Map<String, dynamic> d) {
     return CounsellingSession(
-      id: doc.id,
-      uid: d['uid'] ?? '',
+      id: '${d['_id'] ?? d['id'] ?? ''}',
+      uid: d['firebaseUid'] ?? d['uid'] ?? '',
       name: d['name'] ?? '',
       age: '${d['age'] ?? ''}',
       gender: d['gender'] ?? '',
@@ -158,6 +177,7 @@ class CounsellingSession {
       details: d['details'] ?? '',
       status: CounsellingStatus.parse(d['status']),
       mode: CounsellingMode.parse(d['mode']),
+      meetLink: d['meetLink'] ?? '',
       paymentMode: d['paymentMode'] ?? '',
       transactionId: d['transactionId'] ?? '',
       amount: (d['amount'] is num) ? (d['amount'] as num).toInt() : 0,
@@ -172,8 +192,10 @@ class CounsellingSession {
     );
   }
 
-  Map<String, dynamic> toMap() => {
-        'uid': uid,
+  /// The intake payload. Only the fields `POST /api/counselling/sessions`
+  /// accepts — status, amount and every timestamp are the server's to decide,
+  /// and sending them would be a client asserting its own state.
+  Map<String, dynamic> toIntakeJson() => {
         'name': name,
         'age': age,
         'gender': gender,
@@ -181,15 +203,6 @@ class CounsellingSession {
         'concern': concern,
         'language': language,
         'details': details,
-        'status': status.wire,
-        'mode': mode.wire,
-        'paymentMode': paymentMode,
-        'transactionId': transactionId,
-        'amount': amount,
-        'createdAt': Timestamp.fromDate(createdAt),
-        if (approvedAt != null) 'approvedAt': Timestamp.fromDate(approvedAt!),
-        if (endedAt != null) 'endedAt': Timestamp.fromDate(endedAt!),
-        if (purgeAfter != null) 'purgeAfter': Timestamp.fromDate(purgeAfter!),
       };
 
   /// True once the two-hour window has passed and this session should no
@@ -269,21 +282,20 @@ class ChatMessage {
     this.audioSeconds = 0,
   });
 
-  factory ChatMessage.fromDoc(DocumentSnapshot doc) {
-    final d = (doc.data() as Map<String, dynamic>?) ?? const {};
-    final raw = d['createdAt'];
+  factory ChatMessage.fromJson(Map<String, dynamic> d) {
     return ChatMessage(
-      id: doc.id,
+      id: '${d['_id'] ?? d['id'] ?? ''}',
       sender: ChatSender.parse(d['sender']),
       kind: ChatKind.parse(d['kind']),
       text: d['text'] ?? '',
       audioUrl: d['audioUrl'] ?? '',
       audioSeconds:
           (d['audioSeconds'] is num) ? (d['audioSeconds'] as num).toInt() : 0,
-      // A message written offline has no server stamp yet; falling back to now
-      // keeps it at the bottom of the list where the sender expects it, rather
-      // than at 1970.
-      createdAt: raw is Timestamp ? raw.toDate() : DateTime.now(),
+      // Every message is stamped by the server now, so the "written offline
+      // with no stamp yet" case Firestore had cannot arise. The fallback stays
+      // as a guard against a malformed row, and keeps it at the bottom of the
+      // list where the sender expects it rather than at 1970.
+      createdAt: CounsellingSession._date(d['createdAt']) ?? DateTime.now(),
     );
   }
 }

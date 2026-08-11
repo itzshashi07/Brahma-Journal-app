@@ -1,8 +1,6 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
-import '../core/constants/app_constants.dart';
-import '../core/utils/stats_utils.dart';
+import 'api_service.dart';
 
 /// Streak recovery: one missed day, once a month.
 ///
@@ -10,9 +8,8 @@ import '../core/utils/stats_utils.dart';
 ///
 ///   • **One day only.** Recovering a two-day gap would make the streak a
 ///     number you can buy rather than one you kept, and the number is the only
-///     thing on the community board that is supposed to mean something. See
-///     [recoverableGapDay] — a gap wider than a single day returns null and no
-///     amount of allowance changes that.
+///     thing on the community board that is supposed to mean something. A gap
+///     wider than a single day is not recoverable and no allowance changes that.
 ///   • **Once every 30 days.** Enough that a genuine slip — a flight, a bad
 ///     day, a dead battery — does not erase four months of practice. Not enough
 ///     to become part of the routine.
@@ -25,15 +22,70 @@ import '../core/utils/stats_utils.dart';
 /// fabricated journal entry. That distinction matters: the entry count, the
 /// analytics and the member's own history stay honest — nothing is invented,
 /// the streak calculation is simply told that one day is forgiven.
+///
+/// ─────────────────────────────────────────────────────────────────────────
+/// What moved to the server
+///
+/// Both the gap calculation and the 30-day allowance check now run in the API.
+/// The client used to compute which day was recoverable and then write it, with
+/// firestore.rules enforcing a 29-day window as a backstop. That let the device
+/// choose the day it was forgiving. The server now re-derives the recoverable
+/// day itself and ignores whatever the client thinks — otherwise the streak is
+/// a number you can type rather than one you kept.
 class StreakService {
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  final ApiService _api = ApiService();
 
-  /// How long before another recovery is available.
-  ///
-  /// firestore.rules enforces 29 days rather than 30. The difference is
-  /// deliberate slack for clock skew: the client is the stricter of the two, so
-  /// a member never sees "available" for a write the server then refuses.
+  /// How long before another recovery is available. Kept for the UI copy; the
+  /// server is the authority and enforces the same window.
   static const Duration allowance = Duration(days: 30);
+
+  int get _tzOffsetMinutes => DateTime.now().timeZoneOffset.inMinutes;
+
+  /// What the member can do right now.
+  ///
+  /// [entryDates] is no longer sent — the server reads the entries itself, so
+  /// the parameter is accepted and ignored to keep existing call sites
+  /// compiling. Never throws: a failed check offers nothing, because a recovery
+  /// the server will refuse is worse than no button.
+  Future<StreakRecovery> check({
+    String? uid,
+    Iterable<DateTime> entryDates = const [],
+  }) async {
+    try {
+      final body = await _api.get('/api/profile/me/streak-recovery',
+          query: {'tz': '$_tzOffsetMinutes'});
+
+      final missedRaw = body?['missedDay'];
+      final availableRaw = body?['availableAt'];
+
+      return StreakRecovery(
+        missedDay: missedRaw == null ? null : parseDayKey(missedRaw.toString()),
+        availableAt:
+            availableRaw == null ? null : DateTime.tryParse(availableRaw.toString()),
+      );
+    } catch (e) {
+      debugPrint('⚠️ Streak recovery status unavailable: $e');
+      return const StreakRecovery.unavailable();
+    }
+  }
+
+  /// Spends the allowance.
+  ///
+  /// [day] is accepted for call-site compatibility and deliberately not sent:
+  /// the server decides which day is recoverable. Returns the day that was
+  /// actually forgiven, or null if the server refused.
+  Future<DateTime?> recover({String? uid, DateTime? day}) async {
+    try {
+      final body = await _api.post('/api/profile/me/streak-recovery', {
+        'tzOffsetMinutes': _tzOffsetMinutes,
+      });
+      final recovered = body?['recoveredDay'];
+      return recovered == null ? null : parseDayKey(recovered.toString());
+    } catch (e) {
+      debugPrint('⚠️ Streak recovery failed: $e');
+      return null;
+    }
+  }
 
   /// 'yyyy-MM-dd'. A date, not an instant — the whole point is a calendar day,
   /// and a timestamp would carry a timezone the member never chose.
@@ -52,81 +104,26 @@ class StreakService {
     return DateTime.utc(y, m, d);
   }
 
-  /// The days this member has already recovered, read out of a profile
-  /// document. Static so ProfileService can fold them into its streak
-  /// calculation without another read.
-  static List<DateTime> recoveredDaysFrom(Map<String, dynamic>? data) {
-    final raw = data?['recoveredDays'];
-    if (raw is! List) return const [];
-    return raw
-        .whereType<String>()
-        .map(parseDayKey)
-        .whereType<DateTime>()
-        .toList();
-  }
-
-  /// The days this member has already recovered.
+  /// The days this member has already had forgiven.
   ///
-  /// Never throws: a refused read, an offline device or a profile that does not
-  /// exist yet all mean "nothing forgiven", and a streak computed without a
-  /// forgiven day is wrong by one rather than absent entirely.
-  Future<List<DateTime>> recoveredDays(String uid) async {
+  /// Kept because callers still fold them into a locally computed streak for
+  /// the dashboard, which must not wait on a round trip to show a number it can
+  /// derive. Never throws: no forgiven days means a streak wrong by one rather
+  /// than a screen that fails.
+  Future<List<DateTime>> recoveredDays([String? uid]) async {
     try {
-      final doc = await _db
-          .collection(AppConstants.profilesCollection)
-          .doc(uid)
-          .get();
-      return recoveredDaysFrom(doc.data());
+      final body = await _api.get('/api/profile/me');
+      final raw = body?['profile']?['recoveredDays'];
+      if (raw is! List) return const [];
+      return raw
+          .whereType<String>()
+          .map(parseDayKey)
+          .whereType<DateTime>()
+          .toList();
     } catch (e) {
       debugPrint('ℹ️ Recovered days unavailable: $e');
       return const [];
     }
-  }
-
-  /// What the member can do right now.
-  ///
-  /// [entryDates] is the days they actually practised; the recovered days are
-  /// added here, so a second recovery is measured against a history that
-  /// already includes the first.
-  Future<StreakRecovery> check({
-    required String uid,
-    required Iterable<DateTime> entryDates,
-  }) async {
-    Map<String, dynamic>? data;
-    try {
-      final doc = await _db
-          .collection(AppConstants.profilesCollection)
-          .doc(uid)
-          .get();
-      data = doc.data();
-    } catch (e) {
-      debugPrint('⚠️ Streak recovery status unavailable: $e');
-      return const StreakRecovery.unavailable();
-    }
-
-    final recovered = recoveredDaysFrom(data);
-    final lastUsed = parseFirestoreDate(data?['lastStreakRecoveryAt']);
-    final missed = recoverableGapDay([...entryDates, ...recovered]);
-
-    return StreakRecovery(
-      missedDay: missed,
-      availableAt: lastUsed == null ? null : lastUsed.add(allowance),
-    );
-  }
-
-  /// Forgives [day].
-  ///
-  /// `arrayUnion` rather than a read-modify-write: recovering the same day
-  /// twice is then a no-op on the array, and two devices cannot overwrite each
-  /// other's history. `lastStreakRecoveryAt` is a server timestamp because it
-  /// is what the monthly limit is measured from, and a value the device picks
-  /// is a value the device can pick again tomorrow.
-  Future<void> recover({required String uid, required DateTime day}) async {
-    await _db.collection(AppConstants.profilesCollection).doc(uid).set({
-      'recoveredDays': FieldValue.arrayUnion([dayKey(day)]),
-      'lastStreakRecoveryAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
   }
 }
 

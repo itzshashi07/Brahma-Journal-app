@@ -41,6 +41,23 @@ class Purchase {
     );
   }
 
+  /// Built from the Node.js API's JSON.
+  factory Purchase.fromJson(Map<String, dynamic> data) {
+    return Purchase(
+      id: data['_id']?.toString() ?? '',
+      userId: data['firebaseUid'] ?? '',
+      userEmail: data['userEmail'] ?? '',
+      userName: data['userName'] ?? '',
+      productId: data['productId'] ?? '',
+      productTitle: data['productTitle'] ?? '',
+      pdfLink: data['pdfLink'] ?? '',
+      amountPaid: (data['amountPaid'] as num?)?.toDouble() ?? 0.0,
+      razorpayPaymentId: data['razorpayPaymentId'] ?? '',
+      purchasedAt:
+          DateTime.tryParse(data['purchasedAt']?.toString() ?? '') ?? DateTime.now(),
+    );
+  }
+
   Map<String, dynamic> toMap() {
     return {
       'userId': userId,

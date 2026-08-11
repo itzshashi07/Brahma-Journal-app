@@ -5,11 +5,11 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
+import '../../services/api_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/notification_center.dart';
 import '../../models/app_notification.dart';
 import '../../models/announcement.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:share_plus/share_plus.dart';
 
 class NotificationsScreen extends StatefulWidget {
@@ -20,6 +20,9 @@ class NotificationsScreen extends StatefulWidget {
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> with SingleTickerProviderStateMixin {
+  /// Held so `FutureBuilder` does not re-fetch on every rebuild of the tab.
+  Future<List<Map<String, dynamic>>>? _adminAlerts;
+
   late TabController _tabController;
   final NotificationService _notificationService = NotificationService();
   List<String> _deletedNotificationIds = [];
@@ -463,18 +466,25 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
     }
   }
 
+  /// The operator alert feed.
+  ///
+  /// This was a Firestore `snapshots()` listener on `/admin_notifications`,
+  /// open for as long as the tab was on screen. The alerts it delivered are
+  /// also delivered as FCM pushes now, which reach the operator with the app
+  /// closed — so the listener was the *worse* of the two channels and the one
+  /// costing a connection.
+  ///
+  /// Read on open, refreshed by pull-to-refresh and after a dismissal.
   Widget _buildAdminAlertsTab() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('admin_notifications')
-          .orderBy('createdAt', descending: true)
-          .snapshots(),
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _adminAlerts ??= _loadAdminAlerts(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator(color: AppTheme.primary));
         }
 
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+        final alerts = snapshot.data ?? const <Map<String, dynamic>>[];
+        if (alerts.isEmpty) {
           return const Center(
             child: Text(
               'No admin alerts found. 📭',
@@ -483,75 +493,135 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
           );
         }
 
-        final docs = snapshot.data!.docs;
+        return RefreshIndicator(
+          onRefresh: _refreshAdminAlerts,
+          color: AppTheme.primary,
+          child: ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: alerts.length,
+            itemBuilder: (ctx, i) {
+              final data = alerts[i];
+              final id = '${data['_id'] ?? ''}';
+              final title = data['title'] ?? 'Alert';
+              final body = data['body'] ?? '';
+              // `subjectEmail` on anything the API wrote; `userEmail` on the
+              // documents migrated out of Firestore.
+              final userEmail =
+                  '${data['subjectEmail'] ?? data['userEmail'] ?? ''}';
+              final createdAt = DateTime.tryParse('${data['createdAt'] ?? ''}');
+              final dateStr = createdAt != null
+                  ? DateFormat('dd MMM, hh:mm a').format(createdAt)
+                  : '';
 
-        return ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: docs.length,
-          itemBuilder: (ctx, i) {
-            final doc = docs[i];
-            final data = doc.data() as Map<String, dynamic>;
-            final title = data['title'] ?? 'Alert';
-            final body = data['body'] ?? '';
-            final userEmail = data['userEmail'] ?? '';
-            final createdAt = data['createdAt'] as Timestamp?;
-            final dateStr = createdAt != null ? DateFormat('dd MMM, hh:mm a').format(createdAt.toDate()) : '';
-
-            return Card(
-              color: AppTheme.bgCard,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-                side: const BorderSide(color: Color(0xFF2D2D4E)),
-              ),
-              margin: const EdgeInsets.only(bottom: 12),
-              child: ListTile(
-                contentPadding: const EdgeInsets.all(16),
-                title: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(title, style: const TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.bold, color: Colors.white)),
-                    Text(dateStr, style: const TextStyle(fontFamily: 'Outfit', fontSize: 11, color: AppTheme.textMuted)),
-                  ],
+              return Card(
+                color: AppTheme.bgCard,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: const BorderSide(color: Color(0xFF2D2D4E)),
                 ),
-                subtitle: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(height: 8),
-                    Text(body, style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.textSecondary, fontSize: 13)),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        ElevatedButton.icon(
-                          onPressed: () {
-                            Share.share('Please invite this user to Firebase App Distribution:\n$userEmail');
-                          },
-                          icon: const Icon(Icons.share_outlined, size: 14, color: Colors.white),
-                          label: const Text('Share Email', style: TextStyle(fontFamily: 'Outfit', fontSize: 12, color: Colors.white)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppTheme.primary,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                margin: const EdgeInsets.only(bottom: 12),
+                child: ListTile(
+                  contentPadding: const EdgeInsets.all(16),
+                  title: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(title,
+                            style: const TextStyle(
+                                fontFamily: 'Outfit',
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white)),
+                      ),
+                      Text(dateStr,
+                          style: const TextStyle(
+                              fontFamily: 'Outfit',
+                              fontSize: 11,
+                              color: AppTheme.textMuted)),
+                    ],
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 8),
+                      Text(body,
+                          style: const TextStyle(
+                              fontFamily: 'Outfit',
+                              color: AppTheme.textSecondary,
+                              fontSize: 13)),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          if (userEmail.isNotEmpty)
+                            ElevatedButton.icon(
+                              onPressed: () {
+                                Share.share(
+                                    'Please invite this user to Firebase App Distribution:\n$userEmail');
+                              },
+                              icon: const Icon(Icons.share_outlined,
+                                  size: 14, color: Colors.white),
+                              label: const Text('Share Email',
+                                  style: TextStyle(
+                                      fontFamily: 'Outfit',
+                                      fontSize: 12,
+                                      color: Colors.white)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.primary,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8)),
+                              ),
+                            ),
+                          if (userEmail.isNotEmpty) const SizedBox(width: 8),
+                          OutlinedButton(
+                            onPressed: id.isEmpty ? null : () => _dismissAlert(id),
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: Colors.redAccent),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8)),
+                            ),
+                            child: const Text('Dismiss',
+                                style: TextStyle(
+                                    fontFamily: 'Outfit',
+                                    fontSize: 12,
+                                    color: Colors.redAccent)),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        OutlinedButton(
-                          onPressed: () async {
-                            await doc.reference.delete();
-                          },
-                          style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: Colors.redAccent),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                          child: const Text('Dismiss', style: TextStyle(fontFamily: 'Outfit', fontSize: 12, color: Colors.redAccent)),
-                        ),
-                      ],
-                    ),
-                  ],
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            );
-          },
+              );
+            },
+          ),
         );
       },
     );
+  }
+
+  Future<List<Map<String, dynamic>>> _loadAdminAlerts() async {
+    final body = await ApiService()
+        .get('/api/notifications/admin', query: {'limit': '50'});
+    return ((body?['notifications'] as List?) ?? const [])
+        .map((n) => Map<String, dynamic>.from(n as Map))
+        .toList();
+  }
+
+  Future<void> _refreshAdminAlerts() async {
+    final next = _loadAdminAlerts();
+    setState(() => _adminAlerts = next);
+    await next;
+  }
+
+  Future<void> _dismissAlert(String id) async {
+    try {
+      await ApiService().delete('/api/notifications/admin/$id');
+      await _refreshAdminAlerts();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Could not dismiss: $e'),
+            backgroundColor: Colors.redAccent),
+      );
+    }
   }
 }

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'firebase_options.dart';
@@ -51,6 +52,8 @@ import 'screens/notifications/notifications_screen.dart';
 import 'screens/notifications/create_announcement_screen.dart';
 import 'services/notification_service.dart';
 import 'services/notification_center.dart';
+import 'services/firebase_messaging_service.dart';
+import 'services/api_service.dart';
 
 
 /// Startup.
@@ -83,6 +86,13 @@ void main() async {
     debugPrint('⚠️ Firebase init failed, starting anyway: $e');
   }
 
+  // Registered before runApp and never awaited beyond this call. It hands the
+  // engine a top-level entry point to spawn in a background isolate when a
+  // push arrives with the app closed — registering it later, or from inside
+  // _initBackgroundServices, risks a message landing before the handler exists
+  // and being dropped without trace.
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+
   runApp(const InnenFlowApp());
   debugPrint('▶ boot: first frame scheduled');
 
@@ -91,6 +101,12 @@ void main() async {
 
 /// Hardening and convenience, none of which the first frame depends on.
 Future<void> _initBackgroundServices() async {
+  // Kick the API awake first and do not wait on it. The free-tier instance
+  // suspends after a spell of inactivity, and a cold start takes the better
+  // part of a minute — far better spent now, behind the dashboard, than when
+  // the user opens a screen and watches a spinner.
+  unawaited(ApiService().warmUp());
+
   // App Check attests that requests reach Firebase from a genuine, unmodified
   // build of this app. The Firebase config in firebase_options.dart is public
   // by design — it identifies the project, it does not protect it — so without
@@ -122,6 +138,20 @@ Future<void> _initBackgroundServices() async {
     debugPrint('▶ boot: notifications ready');
   } catch (e) {
     debugPrint('⚠️ Notification setup failed: $e');
+  }
+
+  // Push. Runs after NotificationService because every FCM message is rendered
+  // through it — the plugin has to be initialised before a message can arrive
+  // and ask it to draw something.
+  //
+  // Bounded like everything else here: requestPermission() waits on a system
+  // dialog the user may simply walk away from, and on iOS getToken() can block
+  // until APNs answers.
+  try {
+    await FirebaseMessagingService().init().timeout(const Duration(seconds: 30));
+    debugPrint('▶ boot: push ready');
+  } catch (e) {
+    debugPrint('⚠️ Push setup failed: $e');
   }
 }
 

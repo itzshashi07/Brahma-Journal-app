@@ -16,7 +16,13 @@ class Counselling {
   static const int sessionMinutes = 30;
 
   /// The room a 30-minute call happens in.
-  static const String meetLink = 'https://meet.google.com/pgx-xgss-sjf';
+  // NOTE: the hardcoded `meetLink` that used to live here has been removed.
+  //
+  // It was one Google Meet room, handed to every member who chose a video
+  // call. Anybody holding it could join any other member's counselling
+  // session — in an app whose central promise is that these conversations are
+  // private. The counsellor now issues a room per session when they approve
+  // the call; see CounsellingSession.meetLink.
 
   /// A UPI deep link, for paying from the same phone the app is on. A QR code
   /// is unscannable by the device displaying it, so the button matters more
@@ -93,15 +99,26 @@ class Counselling {
       'How would you like to talk? A video call is better if you want to be '
       'heard; chat is better if writing feels safer. There is no wrong answer.';
 
-  static String meetChosen(String link) =>
-      'A $sessionMinutes-minute video call it is. Join here at your time:\n$link\n\n'
-      'Your counsellor has been notified and will join you. If you get cut off, '
-      'come back to this chat — it stays open.';
+  /// The member asked for a call. Nothing is issued yet — see [meetApproved].
+  static const String meetRequested =
+      'A video call it is. Your counsellor has been asked to confirm a time.\n\n'
+      'The joining link will appear right here in this chat as soon as they do. '
+      'You can close the app — nothing is lost, and you will be notified.';
+
+  /// The counsellor has confirmed and issued a room for this session.
+  ///
+  /// The link is passed in rather than read from a constant. A single shared
+  /// room meant every member with an approved session held a working way into
+  /// everybody else's call; each session now gets its own.
+  static String meetApproved(String link) =>
+      'Your $sessionMinutes-minute video call is confirmed 🌼\n\n'
+      'Join here:\n$link\n\n'
+      'Your counsellor will be waiting. If you get cut off, come back to this '
+      'chat — it stays open.';
 
   static const String chatChosen =
       'We will talk here. Your counsellor has been notified and will reply '
-      'shortly. Take your time — write as much or as little as you want, send a '
-      'voice note if typing is too much.';
+      'shortly. Take your time — write as much or as little as you want.';
 
   static const String rejected =
       'We could not verify that payment. Nothing has been taken from you — '

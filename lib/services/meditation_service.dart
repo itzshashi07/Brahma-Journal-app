@@ -1,57 +1,58 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import '../core/constants/app_constants.dart';
-import '../core/utils/stats_utils.dart';
-import 'profile_service.dart';
+import 'package:flutter/foundation.dart';
 
+import '../core/utils/stats_utils.dart';
+import 'api_service.dart';
+
+/// Meditation sessions, served by the Node.js API.
+///
+/// The `clientCreatedAt` companion field is gone and unmissed. It existed
+/// because a Firestore `serverTimestamp()` reads back as null until the write
+/// is acknowledged, which made "today's minutes" flicker to zero right after a
+/// session. The API stamps `createdAt` before it answers, so every session this
+/// reads already has a real date.
+///
+/// The stats sync also stopped being a second round trip: the API recomputes
+/// the member's totals inside the same request that stores the session, so
+/// there is no window where the session exists and the dashboard disagrees.
 class MeditationService {
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
-  final ProfileService _profileService = ProfileService();
+  final ApiService _api = ApiService();
 
   /// Records a completed stretch of meditation.
   ///
   /// Returns true when the session was stored, so the UI can tell the user the
   /// truth instead of always claiming "session saved".
-  Future<bool> saveSession(String uid, int durationSeconds) async {
+  ///
+  /// [uid] is kept for call-site compatibility and deliberately unused — the
+  /// server attributes the session to the ID token's owner.
+  Future<bool> saveSession(String? uid, int durationSeconds) async {
     if (durationSeconds <= 0) return false;
     try {
-      await _db.collection(AppConstants.meditationSessionsCollection).add({
-        'uid': uid,
-        'duration': durationSeconds,
-        // Client time as well as the server stamp: the server value reads back
-        // null until the write is acknowledged, which made "today's minutes"
-        // flicker to zero right after a session.
-        'clientCreatedAt': Timestamp.fromDate(DateTime.now()),
-        'createdAt': FieldValue.serverTimestamp(),
+      await _api.post('/api/practice/meditation', {
+        'durationSeconds': durationSeconds,
+        'completed': true,
       });
-
-      await _profileService.syncProfileStats(uid);
       return true;
     } catch (e) {
-      print('❌ Failed to save meditation session: $e');
+      debugPrint('❌ Failed to save meditation session: $e');
       return false;
     }
   }
 
-  Future<List<Map<String, dynamic>>> getSessions(String uid) async {
+  Future<List<Map<String, dynamic>>> getSessions([String? uid]) async {
     try {
-      final q = _db
-          .collection(AppConstants.meditationSessionsCollection)
-          .where('uid', isEqualTo: uid);
-      final snapshot = await q.get();
-      final sessions = snapshot.docs.map((doc) {
-        final data = doc.data();
+      final body = await _api.get('/api/practice/meditation', query: {'limit': '500'});
+      final list = (body?['sessions'] as List? ?? const []);
+      return list.map((raw) {
+        final s = Map<String, dynamic>.from(raw as Map);
         return {
-          'id': doc.id,
-          'duration': parseIntField(data['duration']),
-          'createdAt': parseFirestoreDate(data['createdAt']) ??
-              parseFirestoreDate(data['clientCreatedAt']) ??
-              DateTime.now(),
+          'id': s['_id']?.toString() ?? '',
+          'duration': parseIntField(s['durationSeconds']),
+          'createdAt':
+              DateTime.tryParse(s['createdAt']?.toString() ?? '') ?? DateTime.now(),
         };
       }).toList();
-      sessions.sort((a, b) => (b['createdAt'] as DateTime).compareTo(a['createdAt'] as DateTime));
-      return sessions;
     } catch (e) {
-      print('❌ getSessions failed: $e');
+      debugPrint('❌ getSessions failed: $e');
       return [];
     }
   }
@@ -74,62 +75,44 @@ class MeditationService {
 /// grid is training, not practice, and folding it into meditation minutes would
 /// make the one honest number in the app dishonest.
 class FocusService {
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  final ApiService _api = ApiService();
 
-  Future<bool> saveSession(String uid, int durationSeconds, String game) async {
+  Future<bool> saveSession(String? uid, int durationSeconds, String game) async {
     if (durationSeconds <= 0) return false;
     try {
-      await _db.collection(AppConstants.focusSessionsCollection).add({
-        'uid': uid,
-        'duration': durationSeconds,
+      await _api.post('/api/practice/focus', {
+        'durationSeconds': durationSeconds,
         'game': game,
-        'clientCreatedAt': Timestamp.fromDate(DateTime.now()),
-        'createdAt': FieldValue.serverTimestamp(),
+        'completed': true,
       });
       return true;
     } catch (e) {
+      debugPrint('❌ Failed to save focus session: $e');
       return false;
     }
   }
 
   /// Total focus-training seconds, all time.
-  Future<int> totalSeconds(String uid) async {
-    try {
-      final snap = await _db
-          .collection(AppConstants.focusSessionsCollection)
-          .where('uid', isEqualTo: uid)
-          .get();
-      return snap.docs.fold<int>(
-          0, (acc, d) => acc + parseIntField(d.data()['duration']));
-    } catch (e) {
-      return 0;
-    }
+  Future<int> totalSeconds([String? uid]) async {
+    final list = await sessions();
+    return list.fold<int>(0, (acc, s) => acc + s.seconds);
   }
 
   /// Every banked session, so Analytics can break the time down per game.
-  ///
-  /// Sorted client-side rather than with orderBy: the query already filters on
-  /// uid, and adding an ordered field would need a composite index for a list
-  /// that is a few dozen documents long at most.
-  Future<List<FocusSession>> sessions(String uid) async {
+  Future<List<FocusSession>> sessions([String? uid]) async {
     try {
-      final snap = await _db
-          .collection(AppConstants.focusSessionsCollection)
-          .where('uid', isEqualTo: uid)
-          .get();
-      final list = snap.docs.map((d) {
-        final data = d.data();
+      final body = await _api.get('/api/practice/focus', query: {'limit': '500'});
+      final list = (body?['sessions'] as List? ?? const []);
+      return list.map((raw) {
+        final s = Map<String, dynamic>.from(raw as Map);
         return FocusSession(
-          game: (data['game'] ?? 'unknown').toString(),
-          seconds: parseIntField(data['duration']),
-          at: parseFirestoreDate(data['createdAt']) ??
-              parseFirestoreDate(data['clientCreatedAt']) ??
-              DateTime.now(),
+          game: (s['game'] ?? 'unknown').toString(),
+          seconds: parseIntField(s['durationSeconds']),
+          at: DateTime.tryParse(s['createdAt']?.toString() ?? '') ?? DateTime.now(),
         );
       }).toList();
-      list.sort((a, b) => b.at.compareTo(a.at));
-      return list;
     } catch (e) {
+      debugPrint('❌ focus sessions failed: $e');
       return [];
     }
   }

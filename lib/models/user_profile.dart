@@ -109,6 +109,59 @@ class UserProfile {
     );
   }
 
+  /// Builds a profile from the Node.js API's JSON.
+  ///
+  /// The uid arrives in the body as `firebaseUid` rather than being the
+  /// document id, and dates arrive as ISO 8601 strings — [_parseDateTime]
+  /// already handles those, so it is reused rather than duplicated.
+  ///
+  /// A public card fetched for somebody else carries only a handful of fields;
+  /// everything else falls back to the same defaults an absent Firestore field
+  /// would have produced, so a partial profile renders rather than throwing.
+  factory UserProfile.fromJson(Map<String, dynamic> data) {
+    return UserProfile(
+      uid: data['firebaseUid'] ?? '',
+      // `displayName` is what a leaderboard row calls it; `name` is what a
+      // profile calls it. Both are read because this factory serves both, and
+      // reading only `name` left every leaderboard row falling through
+      // [displayName]'s last resort — a board where all eighteen members were
+      // called "Friend".
+      name: data['name'] ?? data['displayName'],
+      email: data['email'],
+      age: data['age'] is num ? (data['age'] as num).toInt() : null,
+      gender: data['gender'],
+      phone: data['phone'],
+      createdAt: _parseDateTime(data['createdAt']),
+      updatedAt: _parseDateTime(data['updatedAt']),
+      streak: _parseInt(data['streak']),
+      longestStreak: _parseInt(data['longestStreak']),
+      totalMeditationSeconds: _parseInt(data['totalMeditationSeconds']),
+      totalJournalEntries: _parseInt(data['totalJournalEntries']),
+      lastActiveAt: _parseDateTime(data['lastActiveAt']),
+      avatarId: data['avatarId'],
+      profession: data['profession'],
+      aim: data['aim'],
+      craftWeeklyTarget: data['craftWeeklyTarget'] is num
+          ? (data['craftWeeklyTarget'] as num).toInt()
+          : 5,
+      customHabits: _parseHabits(data['customHabits']),
+    );
+  }
+
+  /// The body this profile is sent to the API as.
+  ///
+  /// Drops `uid` — the server takes the owner from the verified ID token, and
+  /// a client-supplied uid would be a client-supplied authorization decision.
+  /// It keeps [toMap]'s existing omission of the counters, which are owned by
+  /// the server's sync-stats pass; including them here would write the
+  /// in-memory defaults (0) over the real numbers and wipe the member off the
+  /// leaderboard, which is the bug that comment on [toMap] is guarding.
+  Map<String, dynamic> toJson() {
+    final map = toMap();
+    map.remove('uid');
+    return map;
+  }
+
   /// Anything malformed is dropped rather than thrown on. A single bad entry
   /// must not take the whole profile down with it — that would sign the member
   /// out of their own dashboard over one field.

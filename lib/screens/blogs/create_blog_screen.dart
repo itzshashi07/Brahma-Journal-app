@@ -53,16 +53,12 @@ class _CreateBlogScreenState extends State<CreateBlogScreen> {
         category: _category,
         titleHinglish: _titleHiCtrl.text.trim(),
         contentHinglish: _contentHiCtrl.text.trim(),
-        authorName: auth.profile?.displayName ?? 'Friend',
-        // Was a hardcoded operator address. Only an admin reaches this screen,
-        // so the signed-in account is always the right author — and baking a
-        // real email into the binary just hands out a target for credential
-        // stuffing against the one account that matters.
-        authorEmail: auth.user?.email ?? '',
-        // The admin does not queue behind themselves. firestore.rules checks
-        // this independently, so a client that claims it without the claim gets
-        // a permission error rather than a published article.
-        autoPublish: auth.isAdmin,
+        // No author and no `autoPublish`. Both are the server's now: it takes
+        // the author from the verified ID token, and it decides whether this
+        // publishes or queues from the `admin` claim in that same token. The
+        // client used to send `autoPublish: auth.isAdmin` — a request politely
+        // declaring its own privilege — and only firestore.rules stopped a
+        // member who sent `true` from publishing straight to the Sanctuary.
       );
 
       if (mounted) {

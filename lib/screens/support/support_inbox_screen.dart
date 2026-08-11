@@ -1,33 +1,52 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../core/theme/app_theme.dart';
+import '../../services/api_service.dart';
 import '../../widgets/sacred.dart';
 
 /// Admin inbox for support tickets.
 ///
-/// Every submission is stored in Firestore whether or not the mail relay is
-/// running. Without this screen those tickets were only visible in the Firebase
-/// console, which is not somewhere anyone checks daily — so messages were
-/// arriving and going unread.
+/// Every submission is stored whether or not the mail relay is running.
+/// Without this screen those tickets were only visible in the database console,
+/// which is not somewhere anyone checks daily — so messages were arriving and
+/// going unread.
 ///
-/// This is not a replacement for email: it does not tell you a ticket arrived,
-/// you have to come and look. Real delivery needs the `sendSupportEmail` Cloud
-/// Function, which needs the Blaze plan. Until then this is the difference
-/// between messages being lost and messages being answered.
-class SupportInboxScreen extends StatelessWidget {
+/// It no longer has to be checked by hand to *find out* one arrived: filing a
+/// ticket raises an operator alert through FCM, which reaches a closed app. This
+/// screen is where you then read them.
+///
+/// Read on open and on pull-to-refresh rather than over a live listener. A
+/// support queue is not something anybody watches change in real time, and the
+/// listener held a socket open for as long as the screen was mounted.
+class SupportInboxScreen extends StatefulWidget {
   const SupportInboxScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final query = FirebaseFirestore.instance
-        .collection('support_tickets')
-        .orderBy('createdAt', descending: true)
-        .limit(200);
+  State<SupportInboxScreen> createState() => _SupportInboxScreenState();
+}
 
+class _SupportInboxScreenState extends State<SupportInboxScreen> {
+  late Future<List<Map<String, dynamic>>> _tickets = _load();
+
+  Future<List<Map<String, dynamic>>> _load() async {
+    final body = await ApiService()
+        .get('/api/support/tickets', query: {'limit': '100'});
+    return ((body?['tickets'] as List?) ?? const [])
+        .map((t) => Map<String, dynamic>.from(t as Map))
+        .toList();
+  }
+
+  Future<void> _refresh() async {
+    final next = _load();
+    setState(() => _tickets = next);
+    await next;
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       body: SacredBackdrop(
         child: SafeArea(
@@ -38,8 +57,8 @@ class SupportInboxScreen extends StatelessWidget {
                 onBack: () => context.pop(),
               ),
               Expanded(
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: query.snapshots(),
+                child: FutureBuilder<List<Map<String, dynamic>>>(
+                  future: _tickets,
                   builder: (context, snap) {
                     if (snap.hasError) {
                       return const _Empty(
@@ -55,8 +74,8 @@ class SupportInboxScreen extends StatelessWidget {
                       );
                     }
 
-                    final docs = snap.data!.docs;
-                    if (docs.isEmpty) {
+                    final tickets = snap.data!;
+                    if (tickets.isEmpty) {
                       return const _Empty(
                         icon: Icons.mark_email_read_outlined,
                         title: 'No tickets yet',
@@ -65,12 +84,17 @@ class SupportInboxScreen extends StatelessWidget {
                       );
                     }
 
-                    return ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(AppTheme.space4, 0,
-                          AppTheme.space4, AppTheme.space8),
-                      itemCount: docs.length,
-                      itemBuilder: (_, i) => _TicketCard(
-                        data: docs[i].data() as Map<String, dynamic>,
+                    // Pull-to-refresh is what replaces the listener: the
+                    // operator asks for the current queue rather than holding a
+                    // connection open in case one arrives.
+                    return RefreshIndicator(
+                      onRefresh: _refresh,
+                      color: AppTheme.primary,
+                      child: ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(AppTheme.space4, 0,
+                            AppTheme.space4, AppTheme.space8),
+                        itemCount: tickets.length,
+                        itemBuilder: (_, i) => _TicketCard(data: tickets[i]),
                       ),
                     );
                   },
@@ -90,15 +114,19 @@ class _TicketCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final name = (data['name'] as String?)?.trim();
-    final email = (data['email'] as String?)?.trim() ?? '';
+    // The API's field names, with the Firestore ones kept as a fallback: a
+    // ticket migrated from Firestore carries `name` and `email`, and one filed
+    // since carries `userName` and `userEmail`. Both are in the collection.
+    final name =
+        ((data['userName'] ?? data['name']) as String?)?.trim();
+    final email =
+        ((data['userEmail'] ?? data['email']) as String?)?.trim() ?? '';
     final category = data['category'] as String? ?? 'General';
     final message = data['message'] as String? ?? '';
     final emailed = data['emailed'] as bool? ?? false;
-    final created = data['createdAt'];
-    final when = created is Timestamp
-        ? DateFormat('d MMM, h:mm a').format(created.toDate())
-        : '';
+    final created = DateTime.tryParse('${data['createdAt'] ?? ''}');
+    final when =
+        created == null ? '' : DateFormat('d MMM, h:mm a').format(created);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: AppTheme.space3),

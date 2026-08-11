@@ -118,16 +118,12 @@ class _CounsellingChatViewState extends State<CounsellingChatView> {
                   ? 'This session has ended.'
                   : 'Session ended. This conversation disappears in '
                       '${_formatLeft(session.timeUntilPurge!)}.',
+              // No `sender`: the server derives the role from the verified
+              // token, so a member's build cannot label its own message
+              // `admin` and impersonate a counsellor in the transcript.
               onSendText: (text) => _service.sendText(
                 sessionId: session.id,
-                sender: _me,
                 text: text,
-              ),
-              onSendVoice: (file, seconds) => _service.sendVoiceNote(
-                sessionId: session.id,
-                sender: _me,
-                file: file,
-                seconds: seconds,
               ),
             ),
           ],
@@ -252,8 +248,14 @@ class _CounsellingChatViewState extends State<CounsellingChatView> {
       CounsellingStatus.approved => [
           _ModeChoiceCard(session: session, service: _service),
         ],
+      // Asked for a call, waiting on a human to confirm one. No link exists
+      // yet, and saying so plainly is better than an empty space the member
+      // has to interpret.
+      CounsellingStatus.meetRequested => [
+          _MeetPendingCard(),
+        ],
       CounsellingStatus.active when session.mode == CounsellingMode.meet => [
-          _MeetCard(),
+          _MeetCard(session: session),
         ],
       _ => const [],
     };
@@ -303,7 +305,6 @@ class _PaymentCardState extends State<_PaymentCard> {
         sessionId: widget.session.id,
         paymentMode: _mode,
         transactionId: txn,
-        memberName: widget.session.name,
       );
     } catch (e) {
       if (mounted) {
@@ -612,7 +613,6 @@ class _ModeChoiceCard extends StatelessWidget {
         onTap: () => service.chooseMode(
           sessionId: session.id,
           mode: mode,
-          memberName: session.name,
         ),
         child: Ink(
           decoration: BoxDecoration(
@@ -654,9 +654,66 @@ class _ModeChoiceCard extends StatelessWidget {
   }
 }
 
-/// Shown for the rest of the session once a call was chosen, so the link is
-/// never more than one scroll away.
+/// Waiting for the counsellor to confirm the call.
+///
+/// Its whole job is to answer "did that work?" — the member has tapped a
+/// button and nothing visible happened, which without this reads as a failure.
+class _MeetPendingCard extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(AppTheme.space4),
+      child: Container(
+        padding: const EdgeInsets.all(AppTheme.space4),
+        decoration: BoxDecoration(
+          color: AppTheme.accent.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+          border: Border.all(color: AppTheme.accent.withValues(alpha: 0.35)),
+        ),
+        child: const Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.schedule_rounded, size: 18, color: AppTheme.accentLight),
+            SizedBox(width: AppTheme.space3),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Waiting for your counsellor',
+                    style: TextStyle(
+                        fontFamily: 'Outfit',
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary),
+                  ),
+                  SizedBox(height: 3),
+                  Text(
+                    'They are confirming a time. Your joining link will appear '
+                    'here — you can close the app, we will notify you.',
+                    style: TextStyle(
+                        fontFamily: 'Outfit',
+                        fontSize: 12.5,
+                        height: 1.45,
+                        color: AppTheme.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Shown for the rest of the session once the call has been confirmed, so the
+/// link is never more than one scroll away.
 class _MeetCard extends StatelessWidget {
+  final CounsellingSession session;
+
+  const _MeetCard({required this.session});
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -691,7 +748,7 @@ class _MeetCard extends StatelessWidget {
             SacredButton(
               label: 'Join the call',
               icon: Icons.open_in_new_rounded,
-              onTap: () => openMeet(context),
+              onTap: () => openMeet(context, session.meetLink),
             ),
           ],
         ),

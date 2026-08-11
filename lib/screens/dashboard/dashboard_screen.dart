@@ -19,8 +19,9 @@ import 'thought_picker_sheet.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../widgets/profile_avatar.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:async';
+
+import '../../services/api_service.dart';
 import 'dart:math';
 import '../../models/counselling_session.dart';
 import '../../services/app_update_service.dart';
@@ -39,7 +40,6 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   String _thoughtOfDay = '';
   bool _showChatbot = false;
-  StreamSubscription? _thoughtSubscription;
 
   // The canned-reply chatbot that used to live here is gone. It held a
   // controller, a scroll controller, a message list and a random-response
@@ -51,32 +51,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    _listenToThought();
+    _loadThought();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadData();
     });
   }
 
-  void _listenToThought() {
-    _thoughtSubscription = FirebaseFirestore.instance
-        .collection('metadata')
-        .doc('thought_of_the_day')
-        .snapshots()
-        .listen((snapshot) {
-      if (snapshot.exists) {
-        final data = snapshot.data();
-        if (data != null && data['text'] != null) {
-          setState(() {
-            _thoughtOfDay = data['text'];
-          });
-        }
-      } else {
-        setState(() {
-          _thoughtOfDay =
-              Thoughts365.getThoughtForDay(Thoughts365.dayOfYear(DateTime.now()));
-        });
+  /// The thought of the day.
+  ///
+  /// This was a Firestore `snapshots()` listener held open for the whole life
+  /// of the dashboard — a websocket per device, watching one document that
+  /// changes once a day, to render one line of text. It is a read on open now.
+  ///
+  /// The API caches the value for a minute and sends `Cache-Control` with it,
+  /// so a launch spike costs one query rather than one per install. When an
+  /// operator publishes a new thought the write invalidates that cache
+  /// immediately, and the picker sheet refreshes this screen on the way out.
+  ///
+  /// The offline fallback is the point of the local set: 365 thoughts ship in
+  /// the binary, so a member with no connection still opens the app to
+  /// something rather than to a blank card.
+  Future<void> _loadThought() async {
+    final fallback =
+        Thoughts365.getThoughtForDay(Thoughts365.dayOfYear(DateTime.now()));
+
+    String text = fallback;
+    try {
+      final body = await ApiService().get('/api/support/metadata/thought_of_the_day');
+      final published = body?['value']?['text'];
+      if (published is String && published.trim().isNotEmpty) {
+        text = published;
       }
-    });
+    } catch (e) {
+      // A 404 is the ordinary case before anybody has published one, and an
+      // offline device is the other. Both land on the bundled thought.
+      debugPrint('▶ dashboard: using bundled thought ($e)');
+    }
+
+    if (mounted) setState(() => _thoughtOfDay = text);
   }
 
   Future<void> _loadData() async {
@@ -176,7 +188,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
-    _thoughtSubscription?.cancel();
     super.dispose();
   }
 
@@ -186,6 +197,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// app were unreachable unless you happened to remember one word for word.
   Future<void> _showEditThoughtDialog() async {
     await ThoughtPickerSheet.show(context, _thoughtOfDay);
+    // The sheet writes through the API; re-read rather than guess.
+    await _loadThought();
     // No setState needed: the banner is driven by a Firestore snapshot
     // listener, so it updates itself the moment the write lands.
   }

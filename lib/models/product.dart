@@ -32,6 +32,24 @@ class Product {
     );
   }
 
+  /// Built from the Node.js API's JSON.
+  ///
+  /// `pdfLink` is deliberately absent from a catalogue response — the server
+  /// releases it only from the endpoint that checks for a purchase first — so
+  /// it defaults to empty here rather than being treated as missing data.
+  factory Product.fromJson(Map<String, dynamic> data) {
+    return Product(
+      id: data['_id']?.toString() ?? '',
+      title: data['title'] ?? '',
+      description: data['description'] ?? '',
+      price: data['price'] ?? '',
+      coverImageUrl: data['coverImageUrl'] ?? '',
+      pdfLink: data['pdfLink'] ?? '',
+      createdAt:
+          DateTime.tryParse(data['createdAt']?.toString() ?? '') ?? DateTime.now(),
+    );
+  }
+
   Map<String, dynamic> toMap() {
     return {
       'title': title,

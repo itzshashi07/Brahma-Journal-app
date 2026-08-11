@@ -830,12 +830,21 @@ service cloud.firestore {
       return request.resource.data.status == resource.data.status
              || (resource.data.status in ['awaiting_payment', 'rejected']
                  && request.resource.data.status == 'payment_submitted')
+             // Choosing chat opens the room immediately — there is nothing to
+             // arrange, the counsellor simply replies.
              || (resource.data.status == 'approved'
                  && request.resource.data.status == 'active')
+             // Choosing a video call only ASKS for one. A member may move to
+             // meet_requested; they may not move out of it, because leaving it
+             // is the counsellor agreeing to be there. Without this split a
+             // member could set 'active' themselves and the state would claim a
+             // call was arranged that nobody had agreed to.
+             || (resource.data.status == 'approved'
+                 && request.resource.data.status == 'meet_requested')
              // Either side may close a session that is under way. Ending it is
              // what starts the two-hour deletion clock, so a member must never
              // need permission to stop talking.
-             || (resource.data.status in ['approved', 'active']
+             || (resource.data.status in ['approved', 'meet_requested', 'active']
                  && request.resource.data.status == 'ended');
     }
 
@@ -843,6 +852,11 @@ service cloud.firestore {
       return memberStatusTransitionOk()
              && request.resource.data.uid == resource.data.uid
              && request.resource.data.name == resource.data.name
+             // The room is issued by the counsellor and by nobody else. A
+             // member who could write this field could paste in a link and
+             // then claim in the transcript that it had been given to them.
+             && request.resource.data.get('meetLink', '')
+                  == resource.data.get('meetLink', '')
              && isBoundedString(request.resource.data.paymentMode, 60)
              && isBoundedString(request.resource.data.transactionId, 120);
     }

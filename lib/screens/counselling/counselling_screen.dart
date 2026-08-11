@@ -461,8 +461,22 @@ Future<void> copyUpiId(BuildContext context) async {
   }
 }
 
-Future<void> openMeet(BuildContext context) async {
-  final uri = Uri.parse(Counselling.meetLink);
+/// Opens the room issued for this session.
+///
+/// Takes the link rather than reading a constant: each session gets its own
+/// room, so there is no app-wide meeting link to fall back on any more.
+Future<void> openMeet(BuildContext context, String link) async {
+  if (link.trim().isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('No link yet — your counsellor is confirming the time.',
+            style: TextStyle(fontFamily: 'Outfit')),
+        backgroundColor: AppTheme.accent,
+      ),
+    );
+    return;
+  }
+  final uri = Uri.parse(link.trim());
   try {
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!ok) throw 'could not open';

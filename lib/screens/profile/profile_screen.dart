@@ -5,11 +5,11 @@ import '../../providers/auth_provider.dart';
 import '../../services/profile_service.dart';
 import '../../models/user_profile.dart';
 import '../../core/theme/app_theme.dart';
+import '../../services/api_service.dart';
 import '../../core/constants/app_constants.dart';
 import '../../widgets/avatar_editor.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/app_update_service.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -598,17 +598,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
               onPressed: () async {
                 try {
                   final buildNum = int.tryParse(buildCtrl.text) ?? 1;
-                  await FirebaseFirestore.instance
-                      .collection('app_config')
-                      .doc('version')
-                      .set({
-                    'latest_version': versionCtrl.text.trim(),
-                    'latest_build': buildNum,
-                    'release_notes': notesCtrl.text.trim(),
-                    'force_update': forceUpdate,
-                    'download_url': 'https://appdistribution.firebase.google.com/testerapps/1:440787316408:android:38e64b73850e55b977ce4d',
-                    'updated_at': FieldValue.serverTimestamp(),
-                  }, SetOptions(merge: true));
+                  // Through the API, which is admin-gated and drops its
+                  // cached copy of this key in the same request. `force_update`
+                  // is the one lever that can put a blocking banner on every
+                  // device, and a Firestore rule could only say "an admin may
+                  // write /app_config" — not what shape the value had to be.
+                  //
+                  // The server merges the object, matching the
+                  // `SetOptions(merge: true)` this replaced: a release that
+                  // omits a field must not erase the one already published.
+                  await ApiService().put('/api/support/config/version', {
+                    'value': {
+                      'latest_version': versionCtrl.text.trim(),
+                      'latest_build': buildNum,
+                      'release_notes': notesCtrl.text.trim(),
+                      'force_update': forceUpdate,
+                      'download_url':
+                          'https://appdistribution.firebase.google.com/testerapps/1:440787316408:android:38e64b73850e55b977ce4d',
+                      'updated_at': DateTime.now().toUtc().toIso8601String(),
+                    },
+                  });
 
                   if (context.mounted) {
                     Navigator.pop(ctx);

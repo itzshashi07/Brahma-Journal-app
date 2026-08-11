@@ -1,6 +1,6 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+
+import 'api_service.dart';
 
 /// Following, on the Community screen and nowhere else.
 ///
@@ -10,36 +10,21 @@ import 'package:flutter/foundation.dart';
 /// mental-health app tells you who someone is drawn to at the moment they are
 /// struggling — which is not a thing to publish next to a leaderboard.
 ///
-/// So there are two collections and they hold deliberately different things:
+/// Firestore enforced that structurally: `/following/{me}/targets/{them}` was
+/// keyed off the follower's uid, so there was no query another client could
+/// run that returned it, and `/follower_counts/{them}` held only an integer.
 ///
-///   • **/following/{me}/targets/{them}** — the relationship itself. Readable
-///     and writable only by *me*. Nobody, including the person being followed,
-///     can read this: firestore.rules keys the whole document path off the
-///     follower's uid, so there is no query any other client can run that
-///     returns it. It doubles as the answer to "who am I following", which is
-///     one cheap collection read rather than a lookup per member.
+/// MongoDB has no such structure — the edges are one collection — so the
+/// guarantee now lives in the API, which will answer "who do I follow" and
+/// "how many followers does X have" and deliberately offers no endpoint for
+/// "who follows me". Not even to the person being followed.
 ///
-///   • **/follower_counts/{them}** — a single integer, readable by every
-///     signed-in member. It is written by the *follower*, which would normally
-///     mean anyone could inflate anyone's number; the rule closes that by
-///     tying the write to the relationship document with `existsAfter()`, so a
-///     +1 is only accepted in the same commit that creates a follow that did
-///     not exist, and a −1 only in the commit that removes one that did.
-///
-/// Everything therefore happens in a [WriteBatch]: the two writes are one
-/// commit, and the rule can see both halves. `FieldValue.increment` rather than
-/// a read-then-write keeps two people following the same member at the same
-/// moment from losing one of the two counts.
+/// The two-write batch is gone with it. Firestore needed a [WriteBatch] so its
+/// rules could see the edge and the counter in one commit; the server owns
+/// both and adjusts the counter only when the edge actually changed, so a
+/// double-tap cannot inflate a number by two.
 class FollowService {
-  final _db = FirebaseFirestore.instance;
-
-  String? get _uid => FirebaseAuth.instance.currentUser?.uid;
-
-  DocumentReference<Map<String, dynamic>> _target(String me, String them) =>
-      _db.collection('following').doc(me).collection('targets').doc(them);
-
-  DocumentReference<Map<String, dynamic>> _count(String them) =>
-      _db.collection('follower_counts').doc(them);
+  final ApiService _api = ApiService();
 
   // ─────────────────────────── reading ───────────────────────────
 
@@ -48,110 +33,43 @@ class FollowService {
   /// One read for the whole set, so the Community screen can render every
   /// row's button state without a lookup per member.
   Future<Set<String>> myFollowing() async {
-    final me = _uid;
-    if (me == null) return {};
     try {
-      final snap =
-          await _db.collection('following').doc(me).collection('targets').get();
-      return snap.docs.map((d) => d.id).toSet();
+      final body = await _api.get('/api/social/following');
+      final list = (body?['following'] as List? ?? const []);
+      return list.map((e) => e.toString()).toSet();
     } catch (e) {
-      debugPrint('⚠️ Could not read who you follow: $e');
-      return {};
+      debugPrint('⚠️ Following list unavailable: $e');
+      return <String>{};
     }
   }
 
-  /// Follower counts for the whole community, keyed by uid.
-  ///
-  /// A list of a public collection rather than a get per member: the Community
-  /// screen needs all of them at once, and thirty document reads to render one
-  /// screen is thirty round trips.
+  /// Public follower counts, keyed by uid.
   Future<Map<String, int>> followerCounts() async {
     try {
-      final snap = await _db.collection('follower_counts').get();
+      final body = await _api.get('/api/social/follower-counts');
+      final counts = (body?['counts'] as Map? ?? const {});
       return {
-        for (final doc in snap.docs)
-          doc.id: (doc.data()['count'] is num)
-              ? (doc.data()['count'] as num).toInt()
-              : 0,
+        for (final e in counts.entries)
+          e.key.toString(): (e.value as num?)?.toInt() ?? 0,
       };
     } catch (e) {
-      debugPrint('⚠️ Could not read follower counts: $e');
-      return {};
+      debugPrint('⚠️ Follower counts unavailable: $e');
+      return <String, int>{};
     }
   }
-
-  /// Live count for one member — used on their own profile.
-  Stream<int> streamFollowerCount(String uid) => _count(uid).snapshots().map(
-        (d) => (d.data()?['count'] is num)
-            ? (d.data()!['count'] as num).toInt()
-            : 0,
-      );
 
   // ─────────────────────────── writing ───────────────────────────
 
-  /// Follows [targetUid]. Idempotent — following twice is one follower.
-  ///
-  /// The idempotency is enforced by the rule, not by this method: the +1 is
-  /// only accepted when the relationship document did *not* exist before the
-  /// commit, so a client that re-sends the batch has the whole thing rejected
-  /// rather than double-counting.
   Future<void> follow(String targetUid) async {
-    final me = _uid;
-    // Following yourself would be a free +1 on your own public number, so it is
-    // refused here and in firestore.rules.
-    if (me == null || me == targetUid) return;
-
-    final batch = _db.batch();
-    batch.set(_target(me, targetUid), {
-      'follower': me,
-      'following': targetUid,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-    batch.set(
-      _count(targetUid),
-      {
-        'uid': targetUid,
-        'count': FieldValue.increment(1),
-        'updatedAt': FieldValue.serverTimestamp(),
-      },
-      SetOptions(merge: true),
-    );
-    await batch.commit();
+    await _api.post('/api/social/follow/$targetUid');
   }
 
-  /// Unfollows [targetUid].
   Future<void> unfollow(String targetUid) async {
-    final me = _uid;
-    if (me == null || me == targetUid) return;
-
-    // A count that is somehow already zero must not block the unfollow: the
-    // rule refuses a negative count, which would fail the batch and leave the
-    // member permanently following someone they asked to stop following. The
-    // relationship is what matters, so in that case it goes on its own.
-    final current = await _count(targetUid).get();
-    final count = (current.data()?['count'] is num)
-        ? (current.data()!['count'] as num).toInt()
-        : 0;
-    if (count <= 0) {
-      await _target(me, targetUid).delete();
-      return;
-    }
-
-    final batch = _db.batch();
-    batch.delete(_target(me, targetUid));
-    batch.set(
-      _count(targetUid),
-      {
-        'uid': targetUid,
-        'count': FieldValue.increment(-1),
-        'updatedAt': FieldValue.serverTimestamp(),
-      },
-      SetOptions(merge: true),
-    );
-    await batch.commit();
+    await _api.delete('/api/social/follow/$targetUid');
   }
 
-  /// Follows or unfollows, and reports the state it ended in.
+  /// Flips the relationship and reports the new state, so the caller can update
+  /// a button without re-reading anything.
   Future<bool> toggle(String targetUid, {required bool currentlyFollowing}) async {
     if (currentlyFollowing) {
       await unfollow(targetUid);

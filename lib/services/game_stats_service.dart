@@ -1,34 +1,35 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
+
 import '../core/utils/stats_utils.dart';
+import 'api_service.dart';
 
 /// Public scores for the Game Zone.
 ///
-/// Kept out of /leaderboard, which is the practice board — journal streaks and
-/// meditation minutes. A game score is a different kind of claim and ranking
+/// Kept out of the practice leaderboard, which ranks journal streaks and
+/// meditation minutes. A game score is a different kind of claim, and ranking
 /// the two together would put "solved a puzzle fast" beside "sat still for a
-/// year". One row per member per game, holding a display name and a number:
-/// no email, phone, age or gender, because this collection is readable by
-/// every signed-in member.
+/// year". One row per member per game, holding a display name and a number —
+/// no email, phone, age or gender, because every signed-in member can read it.
+///
+/// The personal-best comparison moved to the server, and had to. It used to be
+/// read-then-write on the device: two devices finishing a game at the same
+/// moment would race, and the better score could be overwritten by the worse
+/// one. It is now a single conditional update whose filter carries the
+/// comparison, so a losing write matches nothing.
+///
+/// The display name is no longer sent either. The server reads it from the
+/// caller's own profile, which means a member cannot put an arbitrary name on
+/// a public board.
 class GameStatsService {
-  static const String collection = 'game_scores';
-
   /// The synthetic row that ranks total time trained rather than any one game.
   static const String overallId = '_total';
 
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  final ApiService _api = ApiService();
 
-  /// The document id binds the row to its owner, which is what stops one member
-  /// writing a score into another member's row — the rules check that the id is
-  /// exactly `<uid>__<gameId>`.
-  static String rowId(String uid, String gameId) => '${uid}__$gameId';
-
-  /// Publishes a score if it beats what is already stored.
-  ///
-  /// Only the personal best is kept. Storing every attempt would make the board
-  /// a measure of how many times someone played, which is not the thing being
-  /// ranked, and would grow without bound.
+  /// Publishes a score. Only a personal best moves the board; a weaker run
+  /// still counts as a play.
   Future<void> publishScore({
-    required String uid,
+    String? uid,
     required String gameId,
     required int score,
     required bool lowerIsBetter,
@@ -37,59 +38,30 @@ class GameStatsService {
   }) async {
     if (score < 0) return;
     try {
-      final ref = _db.collection(collection).doc(rowId(uid, gameId));
-      final existing = await ref.get();
-      final previous =
-          existing.exists ? parseIntField(existing.data()?['score']) : null;
-      final improved = !existing.exists ||
-          previous == null ||
-          (lowerIsBetter ? score < previous : score > previous);
-
-      // A weaker run still counts as a play — only the number on the board is
-      // held back, so the board shows a best without pretending it was the only
-      // attempt. The merge leaves the stored score untouched, and the rules see
-      // the merged document, so the omitted fields are still validated.
-      if (!improved) {
-        await ref.set({
-          'plays': FieldValue.increment(1),
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-        return;
-      }
-
-      await ref.set({
-        'uid': uid,
+      await _api.post('/api/practice/games/scores', {
         'gameId': gameId,
-        'displayName': _boundedName(displayName),
-        if (avatarId != null) 'avatarId': avatarId,
         'score': score,
-        'plays': FieldValue.increment(1),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    } catch (_) {
+        'lowerIsBetter': lowerIsBetter,
+      });
+    } catch (e) {
       // A leaderboard write must never take a game down with it.
+      debugPrint('⚠️ Could not publish score: $e');
     }
   }
 
   /// Adds banked training seconds to the member's overall row.
   Future<void> addTrainingTime({
-    required String uid,
+    String? uid,
     required int seconds,
     String displayName = 'Friend',
     String? avatarId,
   }) async {
     if (seconds <= 0) return;
     try {
-      await _db.collection(collection).doc(rowId(uid, overallId)).set({
-        'uid': uid,
-        'gameId': overallId,
-        'displayName': _boundedName(displayName),
-        if (avatarId != null) 'avatarId': avatarId,
-        'score': FieldValue.increment(seconds),
-        'plays': FieldValue.increment(1),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    } catch (_) {}
+      await _api.post('/api/practice/games/training', {'seconds': seconds});
+    } catch (e) {
+      debugPrint('⚠️ Could not bank training time: $e');
+    }
   }
 
   /// The top rows for one game.
@@ -99,40 +71,34 @@ class GameStatsService {
     int limit = 50,
   }) async {
     try {
-      final snap = await _db
-          .collection(collection)
-          .where('gameId', isEqualTo: gameId)
-          .orderBy('score', descending: !lowerIsBetter)
-          .limit(limit)
-          .get();
-      return snap.docs.map((d) => GameScoreRow.fromDoc(d.id, d.data())).toList();
-    } catch (_) {
+      final body = await _api.get('/api/practice/games/$gameId/board', query: {
+        'lowerIsBetter': lowerIsBetter.toString(),
+        'limit': limit.toString(),
+      });
+      final list = (body?['top'] as List? ?? const []);
+      return list
+          .map((r) => GameScoreRow.fromJson(Map<String, dynamic>.from(r as Map)))
+          .toList();
+    } catch (e) {
+      debugPrint('⚠️ Game board unavailable: $e');
       return [];
     }
   }
 
-  /// Every row belonging to one member, keyed by game id.
-  Future<Map<String, GameScoreRow>> myRows(String uid) async {
+  /// Every row belonging to the caller, keyed by game id.
+  Future<Map<String, GameScoreRow>> myRows([String? uid]) async {
     try {
-      final snap =
-          await _db.collection(collection).where('uid', isEqualTo: uid).get();
+      final body = await _api.get('/api/practice/games/mine');
+      final rows = (body?['rows'] as Map? ?? const {});
       return {
-        for (final d in snap.docs)
-          GameScoreRow.fromDoc(d.id, d.data()).gameId:
-              GameScoreRow.fromDoc(d.id, d.data())
+        for (final e in rows.entries)
+          e.key.toString():
+              GameScoreRow.fromJson(Map<String, dynamic>.from(e.value as Map)),
       };
-    } catch (_) {
+    } catch (e) {
+      debugPrint('⚠️ Game rows unavailable: $e');
       return {};
     }
-  }
-
-  /// Names are shown to other members, so they are length-bounded here as well
-  /// as in the rules — the rules reject a long one, and being rejected would
-  /// silently cost the member their score.
-  static String _boundedName(String name) {
-    final trimmed = name.trim();
-    if (trimmed.isEmpty) return 'Friend';
-    return trimmed.length <= 80 ? trimmed : trimmed.substring(0, 80);
   }
 }
 
@@ -155,15 +121,15 @@ class GameScoreRow {
     this.updatedAt,
   });
 
-  factory GameScoreRow.fromDoc(String id, Map<String, dynamic> data) {
+  factory GameScoreRow.fromJson(Map<String, dynamic> data) {
     return GameScoreRow(
-      uid: (data['uid'] ?? '').toString(),
+      uid: (data['firebaseUid'] ?? '').toString(),
       gameId: (data['gameId'] ?? '').toString(),
       displayName: (data['displayName'] ?? 'Friend').toString(),
       avatarId: data['avatarId']?.toString(),
       score: parseIntField(data['score']),
       plays: parseIntField(data['plays']),
-      updatedAt: parseFirestoreDate(data['updatedAt']),
+      updatedAt: DateTime.tryParse(data['updatedAt']?.toString() ?? ''),
     );
   }
 }

@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 class BlogComment {
   final String id;
   /// Author's Firebase uid — what firestore.rules checks for edit and delete.
@@ -18,31 +16,25 @@ class BlogComment {
     required this.createdAt,
   });
 
-  factory BlogComment.fromMap(String id, Map<String, dynamic> data) {
+  factory BlogComment.fromJson(Map<String, dynamic> data) {
     return BlogComment(
-      id: id,
+      id: '${data['_id'] ?? data['id'] ?? ''}',
       uid: data['uid'] ?? '',
       authorName: data['authorName'] ?? 'Anonymous',
       authorEmail: data['authorEmail'] ?? '',
       content: data['content'] ?? '',
-      createdAt: data['createdAt'] is Timestamp
-          ? (data['createdAt'] as Timestamp).toDate()
-          : DateTime.tryParse(data['createdAt']?.toString() ?? '') ?? DateTime.now(),
+      createdAt:
+          DateTime.tryParse('${data['createdAt'] ?? ''}') ?? DateTime.now(),
     );
   }
 
-  Map<String, dynamic> toMap() {
-    return {
-      // Stamped so a comment is attributable to its author: firestore.rules
-      // uses it to let someone edit or delete their own comment and nobody
-      // else's. Without it every comment write was rejected.
-      'uid': uid,
-      'authorName': authorName,
-      'authorEmail': authorEmail,
-      'content': content,
-      'createdAt': FieldValue.serverTimestamp(),
-    };
-  }
+  /// What `POST /api/blogs/:id/comments` accepts.
+  ///
+  /// `uid`, `authorName` and `authorEmail` are gone from the payload. They used
+  /// to be sent and checked against `request.auth.uid` by a rule; the server now
+  /// takes all three off the verified token, so there is nothing here for a
+  /// client to get wrong or to lie about.
+  Map<String, dynamic> toJson() => {'content': content};
 }
 
 /// Where an article is in review.
@@ -87,7 +79,18 @@ class BlogPost {
   final String uid;
 
   final String title;
+
+  /// The article. **Empty on anything that came from a listing** — see
+  /// [excerpt] and [isSummary].
   final String content;
+
+  /// The opening of the article, cut by the server.
+  ///
+  /// `GET /api/blogs` leaves `content` out entirely: it is capped at 100,000
+  /// characters and a listing of a hundred cards was shipping megabytes of
+  /// prose to draw a hundred 120-character previews. The card renders this; the
+  /// reader fetches the article by id when somebody actually opens it.
+  final String excerpt;
 
   /// Category id from [ArticleCategories]. Empty on posts written before
   /// categories existed — the UI falls back to a neutral "Wisdom" chip.
@@ -119,6 +122,7 @@ class BlogPost {
     this.uid = '',
     required this.title,
     required this.content,
+    this.excerpt = '',
     this.category = '',
     this.titleHinglish = '',
     this.contentHinglish = '',
@@ -134,6 +138,17 @@ class BlogPost {
 
   bool get hasHinglish => contentHinglish.trim().isNotEmpty;
 
+  /// True for a post that came from a listing and carries no article body.
+  /// The reader screen refetches by id when it sees one.
+  bool get isSummary => content.isEmpty && excerpt.isNotEmpty;
+
+  /// The preview line on a card. Prefers whichever of the two is actually
+  /// present, so the same widget works for a listing and for a loaded article.
+  String get snippet {
+    final source = content.isNotEmpty ? content : excerpt;
+    return source.length > 120 ? '${source.substring(0, 120)}...' : source;
+  }
+
   bool get isPublished => status == BlogStatus.published;
 
   /// Whether [uid] may see this article at all. An article in review is the
@@ -142,42 +157,39 @@ class BlogPost {
   bool visibleTo({String? viewerUid, bool isAdmin = false}) =>
       isPublished || isAdmin || (viewerUid != null && viewerUid == this.uid);
 
-  factory BlogPost.fromFirestore(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
+  factory BlogPost.fromJson(Map<String, dynamic> data) {
     return BlogPost(
-      id: doc.id,
+      id: '${data['_id'] ?? data['id'] ?? ''}',
       uid: data['uid'] ?? '',
       title: data['title'] ?? '',
       content: data['content'] ?? '',
+      excerpt: data['excerpt'] ?? '',
       category: data['category'] ?? '',
       titleHinglish: data['titleHinglish'] ?? '',
       contentHinglish: data['contentHinglish'] ?? '',
       authorName: data['authorName'] ?? 'Admin',
       authorEmail: data['authorEmail'] ?? '',
-      createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      likes: List<String>.from(data['likes'] ?? []),
-      sharesCount: data['sharesCount'] ?? 0,
+      createdAt:
+          DateTime.tryParse('${data['createdAt'] ?? ''}') ?? DateTime.now(),
+      likes: List<String>.from(data['likes'] ?? const []),
+      sharesCount: (data['sharesCount'] as num?)?.toInt() ?? 0,
       status: BlogStatus.parse(data['status']),
-      publishedAt: (data['publishedAt'] as Timestamp?)?.toDate(),
+      publishedAt: DateTime.tryParse('${data['publishedAt'] ?? ''}'),
       reviewNote: data['reviewNote'] ?? '',
     );
   }
 
-  Map<String, dynamic> toMap() {
-    return {
-      'uid': uid,
-      'title': title,
-      'content': content,
-      'category': category,
-      'titleHinglish': titleHinglish,
-      'contentHinglish': contentHinglish,
-      'authorName': authorName,
-      'authorEmail': authorEmail,
-      'createdAt': FieldValue.serverTimestamp(),
-      'likes': likes,
-      'sharesCount': sharesCount,
-      'status': status.wire,
-      if (publishedAt != null) 'publishedAt': Timestamp.fromDate(publishedAt!),
-    };
-  }
+  /// What `POST`/`PATCH /api/blogs` accepts.
+  ///
+  /// Author, status, likes, share count and every timestamp are absent on
+  /// purpose. Those are the server's — a client that could send `status:
+  /// published` would be approving its own article, which is the one thing the
+  /// review queue exists to prevent.
+  Map<String, dynamic> toJson() => {
+        'title': title,
+        'content': content,
+        'category': category,
+        'titleHinglish': titleHinglish,
+        'contentHinglish': contentHinglish,
+      };
 }

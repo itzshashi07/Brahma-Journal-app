@@ -313,12 +313,14 @@ class CommunityService {
     }
   }
 
-  /// Live view of the caller's watched threads: thought id → replies seen.
-  Stream<Map<String, int>> watchedThreads(String uid) =>
-      _watchlist(uid).snapshots().map((snap) => {
-            for (final doc in snap.docs)
-              doc.id: (doc.data()['seenReplies'] as num?)?.toInt() ?? 0,
-          });
+  // The live `watchedThreads` stream that used to be here is gone.
+  //
+  // It was a Firestore `snapshots()` subscription on the caller's watchlist,
+  // held open for the lifetime of the reflections screen. Nothing called it any
+  // more: NotificationCenter.watchedThreads() reads the same map from
+  // `GET /api/community/watchlist` in one request, because the unread count
+  // that map feeds is computed on the server now rather than derived on the
+  // handset from everything the listener carried.
 
   /// Catches the caller up on threads they have now looked at.
   ///

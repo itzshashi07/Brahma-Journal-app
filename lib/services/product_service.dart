@@ -1,21 +1,26 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
+
 import '../models/product.dart';
-import 'notification_service.dart';
+import 'api_service.dart';
 
+/// The library catalogue, served by the Node.js API.
+///
+/// The `secure` subcollection is gone and needs no replacement. It existed
+/// because Firestore can allow or deny a whole document and has no way to hide
+/// one field from a reader allowed to see the rest — so the paid PDF link had
+/// to live in a separate document with its own rule, or the asset could be
+/// lifted straight out of the catalogue without paying.
+///
+/// The API marks `pdfLink` as unselectable and releases it from one endpoint
+/// that checks for a purchase first. One collection instead of two, and the
+/// same guarantee.
+///
+/// `streamProducts` is now a `Future`. Firestore's `snapshots()` gave a live
+/// stream for free; MongoDB has no client-side equivalent, and the catalogue
+/// changes when an admin publishes a book — roughly never — so a fetch on
+/// screen open is the honest shape rather than a stream that never fires.
 class ProductService {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  static const String _collectionPath = 'products';
-
-  // Stream all products
-  Stream<List<Product>> streamProducts() {
-    return _firestore
-        .collection(_collectionPath)
-        .orderBy('createdAt', descending: true)
-        .snapshots()
-        .map((snapshot) {
-      return snapshot.docs.map((doc) => Product.fromFirestore(doc)).toList();
-    });
-  }
+  final ApiService _api = ApiService();
 
   /// Parses a display price ("₹299", "Free") into paise for the server.
   static int priceToPaise(String price) {
@@ -24,30 +29,34 @@ class ProductService {
     return (amount * 100).round();
   }
 
-  /// Reads the download link for a product.
-  ///
-  /// The link lives in a `secure` subdocument rather than on the catalogue
-  /// entry. The catalogue used to be world-readable *and* carried `pdfLink`,
-  /// so the paid asset could be lifted straight out of Firestore without
-  /// paying and without even signing in. Firestore rules release this document
-  /// only to an admin, to a buyer with a verified purchase, or for a free
-  /// product — the read below simply fails for anyone else.
+  Future<List<Product>> fetchProducts() async {
+    try {
+      final body = await _api.get('/api/library/products');
+      final list = (body?['products'] as List? ?? const []);
+      return list
+          .map((p) => Product.fromJson(Map<String, dynamic>.from(p as Map)))
+          .toList();
+    } catch (e) {
+      debugPrint('❌ fetchProducts failed: $e');
+      return [];
+    }
+  }
+
+  /// Kept as a single-shot stream so existing StreamBuilder call sites compile
+  /// unchanged. It emits once — see the note on this class.
+  Stream<List<Product>> streamProducts() => Stream.fromFuture(fetchProducts());
+
+  /// The download link. Returns null when the caller has not bought the book —
+  /// the server refuses, and a refusal is the expected outcome, not an error.
   Future<String?> fetchSecureLink(String productId) async {
     try {
-      final doc = await _firestore
-          .collection(_collectionPath)
-          .doc(productId)
-          .collection('secure')
-          .doc('link')
-          .get();
-      return doc.data()?['pdfLink'] as String?;
+      final body = await _api.get('/api/library/products/$productId/link');
+      return body?['pdfLink'] as String?;
     } catch (e) {
-      // permission-denied is the expected outcome for a user without access.
       return null;
     }
   }
 
-  // Create a new product
   Future<void> createProduct({
     required String title,
     required String description,
@@ -55,39 +64,28 @@ class ProductService {
     required String coverImageUrl,
     required String pdfLink,
   }) async {
-    final docRef = _firestore.collection(_collectionPath).doc();
-    final paise = priceToPaise(price);
-    final product = Product(
-      id: docRef.id,
-      title: title,
-      description: description,
-      price: price,
-      coverImageUrl: coverImageUrl,
-      pdfLink: '', // never stored on the readable catalogue document
-      createdAt: DateTime.now(),
-    );
-
-    await docRef.set({
-      ...product.toMap(),
-      // Authoritative amount for server-side order creation, so the price can
-      // never be set by the client at checkout time.
-      'pricePaise': paise,
-      'isFree': paise == 0,
+    await _api.post('/api/library/products', {
+      'title': title,
+      'description': description,
+      'price': price,
+      // The authoritative amount, so checkout cannot be re-priced by the client.
+      'priceAmount': priceToPaise(price),
+      'coverImageUrl': coverImageUrl,
+      'pdfLink': pdfLink,
     });
 
-    await docRef.collection('secure').doc('link').set({'pdfLink': pdfLink});
-
-    // Trigger local push notification
-    await NotificationService().sendNotification(
-      title: 'New Book in Library 📚',
-      body: '"$title" is now available in Wisdom Library!',
-      type: 'library',
-      route: '/products',
-    );
+    // Announcing the book is the server's job now: it writes the notification
+    // record and pushes it through FCM in one step, so the pair cannot come
+    // apart because the app was killed between two client writes.
+    await _api.post('/api/notifications', {
+      'title': 'New Book in Library 📚',
+      'body': '"$title" is now available in Wisdom Library!',
+      'type': 'library',
+      'route': '/products',
+    });
   }
 
-  // Delete a product (book/resource)
   Future<void> deleteProduct(String productId) async {
-    await _firestore.collection(_collectionPath).doc(productId).delete();
+    await _api.delete('/api/library/products/$productId');
   }
 }

@@ -1,64 +1,74 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
+
 import '../models/journal_entry.dart';
-import '../core/constants/app_constants.dart';
 import '../core/utils/stats_utils.dart';
-import 'profile_service.dart';
+import 'api_service.dart';
 
+/// The journal, served by the Node.js API over MongoDB.
+///
+/// ─────────────────────────────────────────────────────────────────────────
+/// What changed, and what did not
+///
+/// Reads and writes now go through [ApiService] instead of Firestore. The
+/// calculations did not move: [streakFromDates] and [isSameDayAsToday] are the
+/// same functions as before, so the dashboard and the leaderboard still cannot
+/// disagree about what a streak is.
+///
+/// Two things the API took over that this class used to arrange:
+///
+///   * **Ownership.** Every query used to carry `where('uid', isEqualTo: uid)`
+///     and rely on firestore.rules to enforce it. The server now takes the
+///     owner from the verified ID token, so `getEntries` needs no uid at all —
+///     it cannot be asked for somebody else's journal.
+///   * **Stats.** `saveEntry` used to call `syncProfileStats` afterwards to
+///     keep the leaderboard honest. The API does that inside the same request
+///     that stores the entry, so there is no window where the entry exists and
+///     the count disagrees, and no second round trip on the save path.
 class JournalService {
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
-  final ProfileService _profileService = ProfileService();
+  final ApiService _api = ApiService();
 
-  // Save or update a journal entry (mirrors saveEntry() from data.ts)
+  /// Saves a new entry, or updates one that already exists.
+  ///
+  /// Returns the entry id. Throws [ApiException] on failure rather than
+  /// swallowing it — losing a journal entry silently is the one outcome this
+  /// screen must never have, and the caller needs something to show.
   Future<String> saveEntry(JournalEntry entry, {String? existingEntryId}) async {
-    try {
-      String entryId;
-      if (existingEntryId != null) {
-        await _db.collection(AppConstants.entriesCollection).doc(existingEntryId).update({
-          ...entry.toMap(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-        entryId = existingEntryId;
-      } else {
-        final docRef = await _db.collection(AppConstants.entriesCollection).add({
-          ...entry.toMap(),
-          // A serverTimestamp reads back as null until the write is
-          // acknowledged, so an entry written offline had no date at all and
-          // silently dropped out of the streak. The client stamp is the
-          // fallback for exactly that window.
-          'clientCreatedAt': Timestamp.fromDate(DateTime.now()),
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-        entryId = docRef.id;
-      }
-
-      // Recalculate the profile stats that back the community leaderboard.
-      // Awaited (not fire-and-forget) so the streak the leaderboard reads is
-      // already correct by the time the user leaves the journal screen.
-      await _profileService.syncProfileStats(entry.uid);
-
-      return entryId;
-    } catch (e) {
-      rethrow;
+    if (existingEntryId != null) {
+      final body = await _api.patch('/api/entries/$existingEntryId', entry.toJson());
+      return body?['entry']?['_id']?.toString() ?? existingEntryId;
     }
+
+    final body = await _api.post('/api/entries', entry.toJson());
+    final id = body?['entry']?['_id']?.toString();
+    if (id == null) {
+      throw ApiException(0, 'The entry was saved but the server returned no id.');
+    }
+    return id;
   }
 
-  // Get all entries for a user (mirrors getEntries() from data.ts)
-  Future<List<JournalEntry>> getEntries(String uid) async {
+  /// This member's entries, newest first.
+  ///
+  /// The [uid] parameter is kept so existing callers compile unchanged, and is
+  /// deliberately unused: the server answers for whoever the ID token belongs
+  /// to. Passing somebody else's uid does not and cannot return their journal.
+  Future<List<JournalEntry>> getEntries([String? uid]) async {
     try {
-      final q = _db.collection(AppConstants.entriesCollection).where('uid', isEqualTo: uid);
-      final snapshot = await q.get();
-      final entries = snapshot.docs.map((doc) => JournalEntry.fromFirestore(doc)).toList();
-      entries.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      return entries;
+      final body = await _api.get('/api/entries', query: {'limit': '500'});
+      final list = (body?['entries'] as List? ?? const []);
+      return list
+          .map((e) => JournalEntry.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
     } catch (e) {
-      print('❌ getEntries query failed: $e');
+      // The journal screen renders an empty state rather than an error, which
+      // is the existing behaviour and the right one — a member opening their
+      // diary to a stack trace is worse than one opening it to "nothing yet".
+      debugPrint('❌ getEntries failed: $e');
       return [];
     }
   }
 
-  // Get today's entry (mirrors getTodaysEntry() from data.ts)
-  Future<JournalEntry?> getTodaysEntry(String uid) async {
-    return todaysEntryFrom(await getEntries(uid));
+  Future<JournalEntry?> getTodaysEntry([String? uid]) async {
+    return todaysEntryFrom(await getEntries());
   }
 
   /// Today's entry picked out of an already-loaded list.
@@ -69,17 +79,17 @@ class JournalService {
     return null;
   }
 
+  Future<void> deleteEntry(String entryId) async {
+    await _api.delete('/api/entries/$entryId');
+  }
+
   /// Consecutive days with a journal entry.
-  ///
-  /// Delegates to [streakFromDates] — the same function ProfileService uses to
-  /// write the leaderboard value, so the dashboard and the community screen can
-  /// never disagree.
-  Future<int> calculateStreak(String uid) async {
+  Future<int> calculateStreak([String? uid]) async {
     try {
-      final entries = await getEntries(uid);
+      final entries = await getEntries();
       return streakFromDates(entries.map((e) => e.createdAt));
     } catch (e) {
-      print('❌ calculateStreak failed: $e');
+      debugPrint('❌ calculateStreak failed: $e');
       return 0;
     }
   }
@@ -95,17 +105,4 @@ class JournalService {
     Iterable<DateTime> recoveredDays = const [],
   }) =>
       streakFromDates([...entries.map((e) => e.createdAt), ...recoveredDays]);
-
-  // Get all entries (admin use)
-  Future<List<JournalEntry>> getAllEntries() async {
-    try {
-      final q = _db
-          .collection(AppConstants.entriesCollection)
-          .orderBy('createdAt', descending: true);
-      final snapshot = await q.get();
-      return snapshot.docs.map((doc) => JournalEntry.fromFirestore(doc)).toList();
-    } catch (e) {
-      return [];
-    }
-  }
 }

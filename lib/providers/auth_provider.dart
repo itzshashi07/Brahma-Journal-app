@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:async';
 import '../services/auth_service.dart';
 import '../services/profile_service.dart';
@@ -16,7 +15,6 @@ class AuthProvider extends ChangeNotifier {
   bool _loading = true;
   String? _error;
   bool _isAdmin = false;
-  StreamSubscription? _profileSubscription;
 
   /// Raised when somebody signs in, cleared by whoever reads it. The dashboard
   /// uses it to decide whether to open the welcome celebration — which must
@@ -81,10 +79,9 @@ class AuthProvider extends ChangeNotifier {
       if (user != null && wasSignedOut && !isFirstEvent) _justSignedIn = true;
 
       _user = user;
-      _profileSubscription?.cancel();
       if (user != null) {
         await _refreshAdminClaim(user);
-        _listenToProfile(user.uid);
+        await _loadProfile(user.uid);
       } else {
         _profile = null;
         _isAdmin = false;
@@ -112,77 +109,45 @@ class AuthProvider extends ChangeNotifier {
     if (user != null) await _refreshAdminClaim(user, forceRefresh: true);
   }
 
-  /// Tells the operator that somebody new is here.
+  // The client-side "a new seeker joined" alert that used to live here is
+  // gone.
+  //
+  // It wrote to `/admin_notifications` from the handset, with the document id
+  // derived from the uid so a second attempt would be an *update* — which
+  // firestore.rules refused for anyone but an admin. That was a clever way to
+  // get "exactly once" out of a client that cannot read the collection, and it
+  // depended on three things staying true at once: the rule, the id scheme,
+  // and every sign-in path remembering to call it.
+  //
+  // The server raises it now, from `GET /api/profile/me`, which already knows
+  // whether it just created the profile. That is the same question with a
+  // direct answer, it fires for email, Google and phone without any of them
+  // opting in, and it leaves the app with no Firestore write at all.
+
+  /// Reads the profile once, on sign-in.
   ///
-  /// Raised from every way in — email/password registration, Google, phone —
-  /// because the old version only fired from the signup form, so every member
-  /// who arrived through Google or an SMS code joined silently and the operator
-  /// found out by scrolling the profiles collection.
+  /// This was a Firestore `snapshots()` subscription held open for the entire
+  /// session. It existed because the profile is written from several places —
+  /// the edit screen, `sync-stats`, the avatar picker — and the listener meant
+  /// none of them had to remember to tell the provider.
   ///
-  /// The document id is derived from the uid rather than generated, and that is
-  /// what makes this safe to call on every sign-in: creating it succeeds once,
-  /// and every later attempt is an *update*, which firestore.rules refuses for
-  /// anyone but an admin. So the alert lands exactly once, at first sign-in,
-  /// with no read of the collection (which a member is not allowed to do) and
-  /// no local flag that a reinstall would clear.
-  ///
-  /// Never allowed to throw into the caller: failing to notify the operator
-  /// must not fail somebody's registration.
-  Future<void> _alertAdminNewUser(User user, {String? name}) async {
-    // The operator's own account would otherwise re-raise its own alert on
-    // every login, because for an admin the write is a permitted update.
-    //
-    // Read off the user being signed in rather than off `_user`: this is called
-    // the instant the credential resolves, before the authStateChanges listener
-    // has refreshed either the claim or the stored user.
-    final signedInEmail = user.email?.toLowerCase().trim();
-    if (_isAdmin || signedInEmail == AppConstants.adminEmail.toLowerCase()) {
-      return;
-    }
-
-    final label = name?.trim().isNotEmpty == true
-        ? name!.trim()
-        : (user.displayName ?? user.email?.split('@').first ?? 'A new seeker');
-    final contact = user.email ?? user.phoneNumber ?? 'no contact on file';
-
-    try {
-      await FirebaseFirestore.instance
-          .collection('admin_notifications')
-          .doc('new_user_${user.uid}')
-          .set({
-        'type': 'new_user_signup',
-        'title': '🆕 New Seeker Joined!',
-        'body': '$label ($contact) just joined InnenFlow. '
-            'Add them to Firebase App Distribution testers.',
-        'userEmail': user.email ?? '',
-        'userName': label,
-        'userId': user.uid,
-        'read': false,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-    } catch (_) {
-      // Either the alert already exists (the common case on a second login, and
-      // exactly what we want), or the write was refused. Neither is worth
-      // interrupting the person signing in.
-    }
-  }
-
-  void _listenToProfile(String uid) {
-    _profileSubscription = FirebaseFirestore.instance
-        .collection(AppConstants.profilesCollection)
-        .doc(uid)
-        .snapshots()
-        .listen((doc) {
-      if (doc.exists && doc.data() != null) {
-        _profile = UserProfile.fromFirestore(uid, doc.data()!);
-      }
-      _loading = false;
-      notifyListeners();
-    });
-  }
-
+  /// A live socket per signed-in device is a lot to pay for that, and it is not
+  /// available over the API regardless. Every one of those writers goes through
+  /// this provider or through [ProfileService], so [refreshProfile] after a
+  /// write does the same job for the cost of one request — and the profile only
+  /// changes when this device changes it, which is the case a listener was
+  /// never needed for.
   Future<void> _loadProfile(String uid) async {
-    _profile = await _profileService.getProfile(uid);
+    try {
+      _profile = await _profileService.getProfile(uid);
+    } catch (e) {
+      // Keep whatever was already loaded. A profile that fails to refresh is a
+      // stale name; a profile blanked on a dropped request is a screen that
+      // says the member has no account.
+      debugPrint('⚠️ auth: profile unavailable: $e');
+    }
+    _loading = false;
+    notifyListeners();
   }
 
   /// Signs in through Firebase Auth.
@@ -199,11 +164,11 @@ class AuthProvider extends ChangeNotifier {
       _loading = true;
       notifyListeners();
 
-      final credential = await _authService.signIn(email, password);
-      final signedIn = credential.user ?? FirebaseAuth.instance.currentUser;
-      // Not awaited: the alert is for the operator, and the person signing in
-      // should not wait on a Firestore round trip to reach their dashboard.
-      if (signedIn != null) unawaited(_alertAdminNewUser(signedIn));
+      await _authService.signIn(email, password);
+      // Nothing to do with the credential here: the authStateChanges listener
+      // in the constructor picks the sign-in up, refreshes the admin claim and
+      // loads the profile. The operator alert that used to fire from this line
+      // is raised server-side on profile creation now.
       return true;
     } on FirebaseAuthException catch (e) {
       _error = _mapAuthError(e.code);
@@ -260,11 +225,6 @@ class AuthProvider extends ChangeNotifier {
       // `paymentDate` are now server-only fields (see firestore.rules); they
       // are written by the verifySubscriptionPayment Cloud Function, and only
       // after it has checked the Razorpay HMAC signature against the secret.
-
-      // 4. Notify admin about new user signup. Keyed by uid inside
-      //    [_alertAdminNewUser], so arriving here and then signing in again
-      //    raises one alert, not two.
-      await _alertAdminNewUser(credential.user!, name: name);
 
       _user = credential.user;
       _profile = newProfile;
@@ -325,7 +285,6 @@ class AuthProvider extends ChangeNotifier {
       }
 
       await _ensureProfileExists(credential.user!);
-      unawaited(_alertAdminNewUser(credential.user!));
       return true;
     } on FirebaseAuthException catch (e) {
       _error = e.code == 'account-exists-with-different-credential'
@@ -357,7 +316,6 @@ class AuthProvider extends ChangeNotifier {
         smsCode: smsCode,
       );
       await _ensureProfileExists(credential.user!);
-      unawaited(_alertAdminNewUser(credential.user!));
       return true;
     } on FirebaseAuthException catch (e) {
       _error = e.code == 'invalid-verification-code'
@@ -389,17 +347,18 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
-    _profileSubscription?.cancel();
     await _authService.signOut();
     _profile = null;
     notifyListeners();
   }
 
+  /// Re-reads the profile.
+  ///
+  /// Call this after anything that writes one — the edit screen, the avatar
+  /// picker, `sync-stats`. It is what replaces the listener that used to notice
+  /// on its own.
   Future<void> refreshProfile() async {
-    if (_user != null) {
-      await _loadProfile(_user!.uid);
-      notifyListeners();
-    }
+    if (_user != null) await _loadProfile(_user!.uid);
   }
 
   void clearError() {
@@ -424,9 +383,4 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  @override
-  void dispose() {
-    _profileSubscription?.cancel();
-    super.dispose();
-  }
 }
