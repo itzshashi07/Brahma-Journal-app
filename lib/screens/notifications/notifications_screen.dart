@@ -68,6 +68,24 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
     if (!_initialized) {
       final isAdmin = context.read<AuthProvider>().isAdmin;
       _tabController = TabController(length: isAdmin ? 3 : 2, vsync: this);
+
+      /// Refetch the operator queue every time it is opened.
+      ///
+      /// It was fetched once and then never again for the life of the screen,
+      /// which is how it drifted out of step with a queue that three other
+      /// surfaces can also delete from — and a drifted list is one whose rows
+      /// cannot be dismissed, because their ids are gone. Switching to the tab
+      /// is the moment somebody expects to be looking at the current thing.
+      if (isAdmin) {
+        _tabController.addListener(() {
+          if (!_tabController.indexIsChanging &&
+              _tabController.index == 2 &&
+              mounted) {
+            _refreshAdminAlerts();
+          }
+        });
+      }
+
       _initialized = true;
     }
   }
@@ -685,7 +703,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
           return const Center(child: CircularProgressIndicator(color: AppTheme.primary));
         }
 
-        final alerts = snapshot.data ?? const <Map<String, dynamic>>[];
+        // Rows removed in this session are filtered here as well as on the
+        // server, so a dismissal is instant and survives the rebuild that the
+        // refetch causes.
+        final alerts = (snapshot.data ?? const <Map<String, dynamic>>[])
+            .where((a) => !_justDismissed.contains('${a['_id'] ?? ''}'))
+            .toList();
+
         if (alerts.isEmpty) {
           return const Center(
             child: Text(
@@ -710,6 +734,16 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
               // documents migrated out of Firestore.
               final userEmail =
                   '${data['subjectEmail'] ?? data['userEmail'] ?? ''}';
+              // Where the alert points, resolved to a screen that exists here.
+              //
+              // The server writes the route from the operator's point of view
+              // and does not know this app's router: a support ticket says
+              // `/support`, which is the *member's* contact form, and a new
+              // signup says `/admin`, which is a website page with no
+              // equivalent in the app. Pushing either verbatim would land the
+              // operator somewhere useless or on a blank route, so unknown
+              // destinations simply get no button.
+              final route = _alertDestination('${data['route'] ?? ''}');
               final createdAt = DateTime.tryParse('${data['createdAt'] ?? ''}');
               final dateStr = createdAt != null
                   ? DateFormat('dd MMM, hh:mm a').format(createdAt)
@@ -773,14 +807,41 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
                               ),
                             ),
                           if (userEmail.isNotEmpty) const SizedBox(width: 8),
-                          OutlinedButton(
+
+                          // Go and do the thing the alert is about. An alert
+                          // is a tap on the shoulder, and until now the only
+                          // thing it could be answered with was "dismiss" —
+                          // the operator had to remember which screen a
+                          // counselling request lives on and go there by hand.
+                          if (route.isNotEmpty) ...[
+                            ElevatedButton.icon(
+                              onPressed: () => context.push(route),
+                              icon: const Icon(Icons.arrow_forward_rounded,
+                                  size: 14, color: Colors.white),
+                              label: const Text('Open',
+                                  style: TextStyle(
+                                      fontFamily: 'Outfit',
+                                      fontSize: 12,
+                                      color: Colors.white)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.primary,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8)),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+
+                          OutlinedButton.icon(
                             onPressed: id.isEmpty ? null : () => _dismissAlert(id),
+                            icon: const Icon(Icons.delete_outline,
+                                size: 15, color: Colors.redAccent),
                             style: OutlinedButton.styleFrom(
                               side: const BorderSide(color: Colors.redAccent),
                               shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(8)),
                             ),
-                            child: const Text('Dismiss',
+                            label: const Text('Delete',
                                 style: TextStyle(
                                     fontFamily: 'Outfit',
                                     fontSize: 12,
@@ -799,6 +860,23 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
     );
   }
 
+  /// The screen in *this* app that answers an alert, or '' when there is none.
+  static String _alertDestination(String raw) {
+    switch (raw) {
+      case '/counselling/inbox':
+      case '/counselling':
+        return '/counselling/inbox';
+      case '/support':
+      case '/support-inbox':
+        return '/support-inbox';
+      case '/reports':
+        return '/reports';
+      default:
+        // '/admin' and anything else the website added. Nothing to open.
+        return '';
+    }
+  }
+
   Future<List<Map<String, dynamic>>> _loadAdminAlerts() async {
     final body = await ApiService()
         .get('/api/notifications/admin', query: {'limit': '50'});
@@ -813,17 +891,64 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
     await next;
   }
 
+  /// Deletes one operator alert.
+  ///
+  /// ─────────────────────────────────────────────────────────────────────────
+  /// Why this could get stuck, and could not be got unstuck
+  ///
+  /// The list is fetched once, when the tab is first built, and then held in a
+  /// `Future` for as long as the screen lives. Alerts are deleted from other
+  /// places too — the other handset, the operator console on the website, the
+  /// "clear the queue" button here — so the list on screen goes stale, and a
+  /// stale row's id no longer exists.
+  ///
+  /// The old version treated the resulting **404 as a failure**: it showed
+  /// "Could not dismiss", left the row exactly where it was, and did not
+  /// refetch. So every subsequent tap hit the same missing id and got the same
+  /// error, and the queue became impossible to clear — which is precisely what
+  /// "dismiss nahi ho raha" looks like from the outside. The alert *was* gone
+  /// from the server the whole time; only this screen refused to believe it.
+  ///
+  /// A 404 here means the job is already done. It is treated as success — the
+  /// row goes, and the list is refetched so the rest of it is current.
+  ///
+  /// The removal is optimistic, matching the other two feeds: the card
+  /// disappears on tap and comes back only if the request fails for a reason
+  /// that is not "it is already deleted".
   Future<void> _dismissAlert(String id) async {
+    setState(() => _justDismissed.add(id));
+
     try {
       await ApiService().delete('/api/notifications/admin/$id');
-      await _refreshAdminAlerts();
+    } on ApiException catch (e) {
+      if (e.status != 404) {
+        if (!mounted) return;
+        setState(() => _justDismissed.remove(id));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not dismiss: ${e.message}',
+                style: const TextStyle(fontFamily: 'Outfit')),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        return;
+      }
+      // 404: somebody else already cleared it. Nothing to report.
     } catch (e) {
       if (!mounted) return;
+      setState(() => _justDismissed.remove(id));
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content: Text('Could not dismiss: $e'),
-            backgroundColor: Colors.redAccent),
+          content: Text('Could not dismiss: $e',
+              style: const TextStyle(fontFamily: 'Outfit')),
+          backgroundColor: Colors.redAccent,
+        ),
       );
+      return;
     }
+
+    if (!mounted) return;
+    context.read<NotificationCenter>().refresh();
+    await _refreshAdminAlerts();
   }
 }

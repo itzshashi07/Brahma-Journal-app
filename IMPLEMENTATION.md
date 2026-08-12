@@ -253,33 +253,49 @@ what happens next, the counsellor's last line if they have replied, and a button
 that goes there. With no session it renders nothing and the sheet reads exactly
 as before.
 
-### Deep work: the plan, and the fortnight behind it
+### Deep work: a milestone, its todos, and an honest verdict
 
-`screens/activities/deep_work_screen.dart`, at `/deep-work`.
+`screens/activities/deep_work_screen.dart`, at `/deep-work`. The order on the
+screen is the feature:
 
-Naming a profession gave a member a row of chips on the journal — tap what you
-did today. That records the work and does not help them run it. What was missing
-was a plan of their own (the presets are written by somebody who has never met
-them) and a daily answer (a chip ticked yesterday tells you nothing; fourteen
-dots in a row tell you everything).
+1. **The milestone first.** Everything else this app measures is a habit — did
+   you sit, did you write, did you practise. Habits answer "did you turn up",
+   which the journal and the streak already answer well, and cannot answer "is
+   the thing getting finished". For somebody working towards a job switch or an
+   album that is the only question that matters. Suggestions are seeded from
+   their craft, because "next milestone" is an intimidating blank and a
+   recognisable one when phrased in their own work. A target date is optional
+   and says so — inventing a deadline for somebody is how an app starts lying
+   about urgency.
+2. **Then their own todos.** Add, tick, delete. Nothing else: no priorities, no
+   sub-tasks, no dependencies. Anything more is a second job.
+3. **Then the analysis, and it is allowed to be bad news.** Percent done, steps
+   left, days of real deep work in the last fortnight, the current run, and one
+   sentence of verdict — on course, behind by roughly this much a week, or the
+   date has passed and should be moved rather than carried as guilt. An app
+   that only ever says "great job" is one nobody believes the third time.
 
-So: steps the member writes, ticks daily, and sees as a two-week strip with the
-current run beside it. Adding, renaming and dropping steps is theirs; presets
-belong to the profession and cannot be deleted, because they come back when it
-is reselected and a delete that does not stay done is worse than no delete.
-
-**Nothing new was stored.** The steps are `profile.customHabits`, which the
-setup sheet has always written. Ticking one writes `craftDone` on today's
-journal entry, exactly as the chips do — so a step ticked here is ticked there,
-counts in the consistency chart, and is one number in analytics rather than two
-that disagree. An entry for today is created if there is not one: somebody who
-opens this screen and ticks a step has journalled by any reasonable definition.
+The milestone and todos are their own record (`/api/practice/milestones`); the
+**days worked** come from the journal's `craftDone` by local calendar day, and
+ticking "deep work done today" here writes that same field. One definition of a
+working day, so this screen and the consistency chart cannot disagree.
 
 This is also what forced `JournalEntry.copyWith` to be fixed. It named only the
 sixteen scalar fields and silently dropped the eight list-and-map ones, so
 `copyWith(mood: 4)` returned an entry with no habits, no practices, no craft and
 no check-in. Nothing had ever called it, which is the only reason no journal was
 damaged.
+
+### Every article is a draft until somebody approves it
+
+`POST /api/blogs` used to publish an admin's own article immediately. Publishing
+broadcasts to every member on every device and has no undo, so writing and
+publishing being one tap meant a half-finished draft went out the moment a thumb
+slipped. Everything now starts as `pending`, whoever wrote it, and the only path
+to public is the review screen — which the operator is alerted to, the same way
+they are alerted to a counselling request.
+
+### Deleting a notification means deleting it
 
 ### Deleting a notification means deleting it
 
