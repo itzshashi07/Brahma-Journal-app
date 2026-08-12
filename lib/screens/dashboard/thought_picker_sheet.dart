@@ -60,8 +60,16 @@ class _ThoughtPickerSheetState extends State<ThoughtPickerSheet>
       // can say "an admin may write here" but not "an admin may write this key
       // with this shape". The endpoint is admin-gated *and* validates, and it
       // drops the server's cached copy so the change is live at once.
+      // Stamped with the day it was chosen on. The dashboard only honours an
+      // override while the stamp is the reader's own today, so this is a
+      // choice about *today* rather than a switch left flipped until somebody
+      // remembers to reset it — tomorrow the banner rolls on to the next line
+      // of the library by itself.
       await ApiService().put('/api/support/metadata/thought_of_the_day', {
-        'value': {'text': trimmed},
+        'value': {
+          'text': trimmed,
+          'date': Thoughts365.dateKey(DateTime.now()),
+        },
       });
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
@@ -78,9 +86,8 @@ class _ThoughtPickerSheetState extends State<ThoughtPickerSheet>
     }
   }
 
-  /// Puts the banner back on the automatic day-of-year line by deleting the
-  /// override, rather than by writing today's text into it — otherwise the
-  /// banner would be frozen on today's thought forever.
+  /// Puts the banner back on the automatic day-of-year line straight away,
+  /// rather than waiting for the override to expire at midnight.
   Future<void> _resetToAutomatic() async {
     setState(() => _saving = true);
     try {
@@ -88,7 +95,7 @@ class _ThoughtPickerSheetState extends State<ThoughtPickerSheet>
       // delete verb to reach for — and an empty string is what the dashboard
       // already treats as "no override", falling back to the day-of-year line.
       await ApiService().put('/api/support/metadata/thought_of_the_day', {
-        'value': {'text': ''},
+        'value': {'text': '', 'date': ''},
       });
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
@@ -147,7 +154,8 @@ class _ThoughtPickerSheetState extends State<ThoughtPickerSheet>
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'Everyone sees this on their dashboard until you change it.',
+                  'Everyone sees this for the rest of today. Tomorrow the '
+                  'banner moves on by itself unless you set another.',
                   style: TextStyle(
                       fontFamily: 'Outfit',
                       fontSize: 11.5,

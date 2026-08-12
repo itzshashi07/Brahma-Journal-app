@@ -7,6 +7,19 @@ class Thoughts365 {
   static int dayOfYear(DateTime date) =>
       date.difference(DateTime(date.year, 1, 1)).inDays + 1;
 
+  /// The calendar day an override belongs to, as `YYYY-MM-DD` in local time.
+  ///
+  /// An operator's choice is for *a day*, not forever. The picker stamps the
+  /// day it was published with this and the dashboard only honours an override
+  /// whose stamp matches the reader's own today — so the banner rolls on to the
+  /// next line by itself at midnight instead of freezing on whatever was last
+  /// set. Local rather than UTC for the same reason the streak is: the day a
+  /// person is living in is the one on their own clock.
+  static String dateKey(DateTime date) =>
+      '${date.year.toString().padLeft(4, '0')}-'
+      '${date.month.toString().padLeft(2, '0')}-'
+      '${date.day.toString().padLeft(2, '0')}';
+
   /// The whole library, for the admin picker.
   ///
   /// Exposed read-only rather than making `_thoughts` public: the list is the

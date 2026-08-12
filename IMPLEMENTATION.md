@@ -300,14 +300,39 @@ sixteen scalar fields and silently dropped the eight list-and-map ones, so
 no check-in. Nothing had ever called it, which is the only reason no journal was
 damaged.
 
-### Every article is a draft until somebody approves it
+### A member's article is a draft; an operator's is published
 
-`POST /api/blogs` used to publish an admin's own article immediately. Publishing
-broadcasts to every member on every device and has no undo, so writing and
-publishing being one tap meant a half-finished draft went out the moment a thumb
-slipped. Everything now starts as `pending`, whoever wrote it, and the only path
-to public is the review screen — which the operator is alerted to, the same way
-they are alerted to a counselling request.
+`POST /api/blogs` files anything a member writes as `pending`. It is invisible
+to everybody but its author and the operator until it is approved, and the only
+path to public is the review strip at the top of `/blogs` — which the operator
+is alerted to (`type: 'blog_review'`), the same way they are alerted to a
+counselling request. Approving is `PATCH /api/blogs/:id/review`, and the
+broadcast to every member fires inside that same request, so nobody is told
+about an article before it is readable. Turning one down is not a delete: the
+author keeps the draft and reads the note that came with the decision.
+
+An operator's own article publishes on the spot, because the queue exists to put
+a person between a stranger's writing and the library and they are that person.
+The price is that publishing has no undo short of deleting the article, and the
+compose screen says so before they tap.
+
+### The thought of the day belongs to a day, not to whoever set it last
+
+`metadata/thought_of_the_day` had no expiry. A line an operator published in
+March was still the thought of the day in August, which made the 365 bundled
+thoughts — the whole point of `constants/thoughts_365.dart` — unreachable unless
+somebody remembered to press "Back to automatic".
+
+The picker stamps its write with `Thoughts365.dateKey(DateTime.now())`, and the
+dashboard honours the override only while that stamp equals the reader's own
+local today; a value with no stamp is one written before this existed and counts
+as expired. So the default is the rotation and the override is a deliberate act
+about one day.
+
+Midnight is handled twice on purpose: a one-shot `Timer` aimed at the next
+midnight, for a handset left on the dashboard overnight, and a lifecycle check
+on resume, because a sleeping phone does not fire timers. The website applies
+the identical rule against its own copy of the list.
 
 ### Deleting a notification means deleting it
 

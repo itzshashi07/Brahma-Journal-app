@@ -14,7 +14,6 @@ import '../../widgets/welcome_celebration.dart';
 import '../../widgets/thought_banner.dart';
 import '../../widgets/quick_prompt.dart';
 import '../checkin/daily_checkin_sheet.dart';
-import '../games/game_catalog.dart';
 import 'thought_picker_sheet.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../widgets/profile_avatar.dart';
@@ -22,7 +21,6 @@ import 'package:url_launcher/url_launcher.dart';
 import 'dart:async';
 
 import '../../services/api_service.dart';
-import 'dart:math';
 import '../../models/counselling_session.dart';
 import '../../services/app_update_service.dart';
 import '../../services/counselling_service.dart';
@@ -37,9 +35,16 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen>
+    with WidgetsBindingObserver {
   String _thoughtOfDay = '';
   bool _showChatbot = false;
+
+  /// The day the banner currently on screen was worked out for, and the timer
+  /// that expires with it. Both exist so a phone left on the dashboard
+  /// overnight does not still be showing yesterday in the morning.
+  String _thoughtDay = '';
+  Timer? _midnight;
 
   // The canned-reply chatbot that used to live here is gone. It held a
   // controller, a scroll controller, a message list and a random-response
@@ -51,10 +56,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadThought();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadData();
     });
+  }
+
+  /// A phone that was asleep does not fire timers. Coming back to the app is
+  /// therefore the other moment the date can have moved on without anything
+  /// noticing, and the cheap check below reloads only when it actually has.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        _thoughtDay != Thoughts365.dateKey(DateTime.now())) {
+      _loadThought();
+    }
   }
 
   /// The thought of the day.
@@ -71,15 +88,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// The offline fallback is the point of the local set: 365 thoughts ship in
   /// the binary, so a member with no connection still opens the app to
   /// something rather than to a blank card.
+  ///
+  /// ─────────────────────────────────────────────────────────────────────────
+  /// An override belongs to the day it was published on
+  ///
+  /// The banner used to show whatever an operator had last set, forever: one
+  /// thought published in March was still the thought of the day in August,
+  /// because nothing ever cleared it. The day-of-year library underneath it —
+  /// the whole reason 365 lines are written and shipped — was unreachable
+  /// unless somebody remembered to press "Back to automatic".
+  ///
+  /// So the picker stamps its write with the day it was made on, and an
+  /// override is only honoured while that stamp is today. Come midnight the
+  /// banner returns to the line for the new day on its own, and if the operator
+  /// wants a different one they set it again — which is a deliberate act about
+  /// one day, not a switch left flipped.
+  ///
+  /// A stored value with no stamp is one written before this existed. It is
+  /// treated as expired rather than as today's: honouring it would keep exactly
+  /// the frozen banner this replaces.
   Future<void> _loadThought() async {
-    final fallback =
-        Thoughts365.getThoughtForDay(Thoughts365.dayOfYear(DateTime.now()));
+    final now = DateTime.now();
+    final today = Thoughts365.dateKey(now);
 
-    String text = fallback;
+    String text = Thoughts365.getThoughtForDay(Thoughts365.dayOfYear(now));
     try {
       final body = await ApiService().get('/api/support/metadata/thought_of_the_day');
       final published = body?['value']?['text'];
-      if (published is String && published.trim().isNotEmpty) {
+      final publishedOn = body?['value']?['date'];
+      if (published is String &&
+          published.trim().isNotEmpty &&
+          publishedOn == today) {
         text = published;
       }
     } catch (e) {
@@ -88,7 +127,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
       debugPrint('▶ dashboard: using bundled thought ($e)');
     }
 
-    if (mounted) setState(() => _thoughtOfDay = text);
+    if (!mounted) return;
+    setState(() {
+      _thoughtOfDay = text;
+      _thoughtDay = today;
+    });
+    _scheduleMidnightRefresh();
+  }
+
+  /// One timer, aimed at the next midnight rather than a poll every minute.
+  ///
+  /// The extra seconds are slack: a timer that fires a hair *before* the date
+  /// changes would recompute the same day and then not run again until the one
+  /// after.
+  void _scheduleMidnightRefresh() {
+    _midnight?.cancel();
+    final now = DateTime.now();
+    final tomorrow = DateTime(now.year, now.month, now.day + 1);
+    _midnight = Timer(
+      tomorrow.difference(now) + const Duration(seconds: 5),
+      () {
+        if (mounted) _loadThought();
+      },
+    );
   }
 
   Future<void> _loadData() async {
@@ -188,6 +249,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
+    _midnight?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -197,10 +260,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// app were unreachable unless you happened to remember one word for word.
   Future<void> _showEditThoughtDialog() async {
     await ThoughtPickerSheet.show(context, _thoughtOfDay);
-    // The sheet writes through the API; re-read rather than guess.
+    // The sheet writes through the API; re-read rather than guess. The read
+    // also re-applies the day stamp, so cancelling out of the sheet cannot
+    // leave the banner claiming an override that is no longer live.
     await _loadThought();
-    // No setState needed: the banner is driven by a Firestore snapshot
-    // listener, so it updates itself the moment the write lands.
   }
 
   @override
@@ -414,12 +477,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         _NavCard(icon: Icons.sports_esports_outlined, title: 'Game Zone', subtitle: 'Reset your focus', route: '/games', color: Color(0xFF8B5CF6)),
                       ],
                     ),
-                    const SizedBox(height: 16),
-
-                    // The shuffled strip of individual games, kept directly
-                    // under the section it belongs to rather than floating at
-                    // the bottom of the screen with no heading above it.
-                    const _GameZoneSection(),
+                    // No strip of individual games under this section. The
+                    // Unwind tile above already opens the Game Zone, and a
+                    // shuffled horizontal carousel of six of them directly
+                    // beneath it said the same thing twice — the second time
+                    // at six times the height.
                     const SizedBox(height: 26),
 
                     const _NavSection(
@@ -816,182 +878,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (hour < 12) return 'Good Morning';
     if (hour < 17) return 'Good Afternoon';
     return 'Good Evening';
-  }
-}
-
-/// The Game Zone strip on the home screen.
-///
-/// A heading, a shuffled handful of games and a way into the full list. It is
-/// shuffled per build on purpose: a fixed five would mean the other ten are
-/// never discovered by anyone who does not tap through.
-class _GameZoneSection extends StatefulWidget {
-  const _GameZoneSection();
-
-  @override
-  State<_GameZoneSection> createState() => _GameZoneSectionState();
-}
-
-class _GameZoneSectionState extends State<_GameZoneSection> {
-  late final List<GameEntry> _featured;
-
-  @override
-  void initState() {
-    super.initState();
-    _featured = ([...kGames]..shuffle(Random())).take(6).toList();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Text(
-              'Game Zone',
-              style: TextStyle(
-                fontFamily: 'Outfit', fontSize: 21, fontWeight: FontWeight.w700,
-                color: AppTheme.textPrimary,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: AppTheme.accent.withValues(alpha: 0.16),
-                borderRadius: BorderRadius.circular(AppTheme.radiusPill),
-                border: Border.all(color: AppTheme.accent.withValues(alpha: 0.4)),
-              ),
-              child: Text(
-                '${kGames.length} games',
-                style: const TextStyle(
-                  fontFamily: 'Outfit', fontSize: 10.5, fontWeight: FontWeight.w600,
-                  color: AppTheme.accentLight,
-                ),
-              ),
-            ),
-            const Spacer(),
-            GestureDetector(
-              onTap: () => context.push('/games'),
-              child: const Row(
-                children: [
-                  Text(
-                    'See all',
-                    style: TextStyle(
-                        fontFamily: 'Outfit', fontSize: 13, color: AppTheme.primaryLight),
-                  ),
-                  Icon(Icons.chevron_right_rounded,
-                      size: 18, color: AppTheme.primaryLight),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        const Text(
-          'Two minutes of attention training. Scored, and kept separate from your meditation minutes.',
-          style: TextStyle(
-              fontFamily: 'Outfit', fontSize: 12.5, height: 1.4, color: AppTheme.textMuted),
-        ),
-        const SizedBox(height: 12),
-        SizedBox(
-          height: 132,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: _featured.length + 1,
-            separatorBuilder: (_, __) => const SizedBox(width: 12),
-            itemBuilder: (_, i) => i == _featured.length
-                ? _AllGamesTile(onTap: () => context.push('/games'))
-                : _GameTile(game: _featured[i]),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _GameTile extends StatelessWidget {
-  final GameEntry game;
-
-  const _GameTile({required this.game});
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 148,
-      child: GlassCard(
-        onTap: () => openGame(context, game),
-        padding: const EdgeInsets.all(AppTheme.space3),
-        radius: AppTheme.radiusMd,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(colors: game.colors),
-                borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-              ),
-              child: Icon(game.icon, color: Colors.white, size: 19),
-            ),
-            const Spacer(),
-            Text(
-              game.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontFamily: 'Outfit', fontSize: 14.5, fontWeight: FontWeight.w700,
-                color: AppTheme.textPrimary,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              game.subtitle,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                  fontFamily: 'Outfit', fontSize: 10.5, height: 1.3, color: AppTheme.textMuted),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _AllGamesTile extends StatelessWidget {
-  final VoidCallback onTap;
-
-  const _AllGamesTile({required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 120,
-      child: GlassCard(
-        onTap: onTap,
-        padding: const EdgeInsets.all(AppTheme.space3),
-        radius: AppTheme.radiusMd,
-        highlighted: true,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.sports_esports_outlined,
-                color: AppTheme.primaryLight, size: 28),
-            const SizedBox(height: 8),
-            Text(
-              'All ${kGames.length}\ngames',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontFamily: 'Outfit', fontSize: 13, fontWeight: FontWeight.w700,
-                height: 1.3, color: AppTheme.textPrimary,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }
 
