@@ -29,6 +29,14 @@ import '../../widgets/sacred.dart';
 /// for an exam is also training for a race and also shipping a side project.
 /// They all live here, each with its own steps and its own verdict.
 ///
+/// **And each belongs to a craft, chosen per milestone.** The stamp used to be
+/// `profile.profession` — the single craft named at setup — so an engineer who
+/// also sings had every milestone filed under engineering and was offered
+/// system design courses while trying to record a song. The chooser is on the
+/// setup screen with the profile's craft preselected, and the list groups by it
+/// once there is more than one in play: two tracks read as two tracks, rather
+/// than as one list somebody is permanently behind on.
+///
 /// **Then the member's own todos**, per milestone. Add, tick, delete, and
 /// nothing else — no priorities, no sub-tasks, no dependencies. Anything more is
 /// a second job.
@@ -263,9 +271,84 @@ class _DeepWorkScreenState extends State<DeepWorkScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          ...active.map((m) => _milestoneTile(m, workedDays)),
+          ..._byCraft(active, workedDays),
         ],
       ],
+    );
+  }
+
+  /// The active milestones, under a heading per craft.
+  ///
+  /// ─────────────────────────────────────────────────────────────────────────
+  /// Why the grouping only appears when there is something to group
+  ///
+  /// Somebody running two milestones for one craft is looking at a list, and a
+  /// heading above a list of two that all belong to the same thing is furniture.
+  /// Somebody running an engineering milestone and a singing one is looking at
+  /// two different lives, and reading them as one undifferentiated list is how
+  /// "I am behind on everything" happens — the mixed list hides that each track
+  /// is fine on its own terms.
+  ///
+  /// So: one craft, no headings. More than one, a heading each, ordered by how
+  /// many are running so the busiest track is at the top.
+  List<Widget> _byCraft(List<Milestone> active, Set<DateTime> workedDays) {
+    final groups = <String, List<Milestone>>{};
+    for (final m in active) {
+      groups.putIfAbsent(m.craft, () => []).add(m);
+    }
+
+    if (groups.length < 2) {
+      return active.map((m) => _milestoneTile(m, workedDays)).toList();
+    }
+
+    final keys = groups.keys.toList()
+      ..sort((a, b) {
+        final byCount = groups[b]!.length.compareTo(groups[a]!.length);
+        if (byCount != 0) return byCount;
+        return Professions.byId(a).label.compareTo(Professions.byId(b).label);
+      });
+
+    return [
+      for (final key in keys) ...[
+        _craftHeading(key, groups[key]!.length),
+        ...groups[key]!.map((m) => _milestoneTile(m, workedDays)),
+        const SizedBox(height: 6),
+      ],
+    ];
+  }
+
+  Widget _craftHeading(String craft, int count) {
+    final profession = Professions.byId(craft);
+    final accent = Professions.accentFor(craft);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8, top: 2),
+      child: Row(
+        children: [
+          Text(profession.emoji, style: const TextStyle(fontSize: 13)),
+          const SizedBox(width: 7),
+          Text(profession.label,
+              style: TextStyle(
+                  fontFamily: 'Outfit',
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                  color: accent)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Container(
+              height: 1,
+              color: accent.withValues(alpha: 0.22),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text('$count',
+              style: const TextStyle(
+                  fontFamily: 'Outfit',
+                  fontSize: 11.5,
+                  color: AppTheme.textMuted)),
+        ],
+      ),
     );
   }
 
@@ -1264,6 +1347,24 @@ class _MilestoneSetupScreenState extends State<_MilestoneSetupScreen> {
   DateTime? _target;
   bool _saving = false;
 
+  /// Which part of this person's life this milestone belongs to.
+  ///
+  /// ─────────────────────────────────────────────────────────────────────────
+  /// Why it is chosen here and not read from the profile
+  ///
+  /// It used to be `profile.profession`, full stop — so every milestone anybody
+  /// set was stamped with the one craft they had named at setup. An engineer
+  /// who also sings had to pick which half of themselves the app was allowed to
+  /// know about, and then watched it suggest system design courses when they
+  /// were trying to record a song. People are not one thing, and a screen about
+  /// what somebody is building has no business insisting otherwise.
+  ///
+  /// The profile's craft is still the default, because for most people most of
+  /// the time it is right and a chooser that has to be answered every time is a
+  /// tax on the common case. Changing it here changes this milestone only: the
+  /// daily habit card in the journal still follows the profile.
+  late String _craft = widget.craft ?? '';
+
   /// A handful of milestones per craft, in the shape people actually say them.
   static const _suggestions = <String, List<String>>{
     'student': [
@@ -1285,7 +1386,7 @@ class _MilestoneSetupScreenState extends State<_MilestoneSetupScreen> {
   };
 
   List<String> get _ideas =>
-      _suggestions[widget.craft ?? ''] ??
+      _suggestions[_craft] ??
       const [
         'Finish the thing I keep restarting',
         'Learn it well enough to use it',
@@ -1308,7 +1409,7 @@ class _MilestoneSetupScreenState extends State<_MilestoneSetupScreen> {
       final milestone = await _service.create(
         title: title,
         why: _whyCtrl.text.trim(),
-        craft: widget.craft ?? '',
+        craft: _craft,
         targetDate: _target,
       );
       if (mounted) Navigator.of(context).pop(milestone);
@@ -1328,8 +1429,6 @@ class _MilestoneSetupScreenState extends State<_MilestoneSetupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final craft = Professions.byId(widget.craft);
-
     return Scaffold(
       body: SacredBackdrop(
         child: SafeArea(
@@ -1357,7 +1456,7 @@ class _MilestoneSetupScreenState extends State<_MilestoneSetupScreen> {
                   ],
                 ),
               ),
-              Expanded(child: _form(craft)),
+              Expanded(child: _form()),
             ],
           ),
         ),
@@ -1365,7 +1464,7 @@ class _MilestoneSetupScreenState extends State<_MilestoneSetupScreen> {
     );
   }
 
-  Widget _form(Profession craft) {
+  Widget _form() {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
       children: [
@@ -1380,10 +1479,10 @@ class _MilestoneSetupScreenState extends State<_MilestoneSetupScreen> {
               color: AppTheme.textPrimary),
         ),
         const SizedBox(height: 8),
-        Text(
-          'One milestone, not a list. Something you could hold up and say — '
-          'that is done. The steps come after.',
-          style: const TextStyle(
+        const Text(
+          'Something you could hold up and say — that is done. The steps come '
+          'after.',
+          style: TextStyle(
               fontFamily: 'Outfit',
               fontSize: 13,
               height: 1.6,
@@ -1391,51 +1490,8 @@ class _MilestoneSetupScreenState extends State<_MilestoneSetupScreen> {
         ),
         const SizedBox(height: 20),
 
-        // The craft, when they have named one — the suggestions are only
-        // recognisable because they are in the language of the work.
-        if (widget.craft == null || widget.craft!.isEmpty)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: InkWell(
-              onTap: widget.onSetUpCraft,
-              child: Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: AppTheme.primary.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-                  border:
-                      Border.all(color: AppTheme.primary.withValues(alpha: 0.3)),
-                ),
-                child: const Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Tell the app what you are getting good at first — the '
-                        'suggestions and the wording follow from it.',
-                        style: TextStyle(
-                            fontFamily: 'Outfit',
-                            fontSize: 12.5,
-                            height: 1.5,
-                            color: AppTheme.textSecondary),
-                      ),
-                    ),
-                    Icon(Icons.arrow_forward_rounded,
-                        size: 18, color: AppTheme.primary),
-                  ],
-                ),
-              ),
-            ),
-          )
-        else
-          Padding(
-            padding: const EdgeInsets.only(bottom: 14),
-            child: Text('${craft.emoji}  ${craft.label}',
-                style: const TextStyle(
-                    fontFamily: 'Outfit',
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.textSecondary)),
-          ),
+        _craftChooser(),
+        const SizedBox(height: 18),
 
         Wrap(
           spacing: 8,
@@ -1522,6 +1578,102 @@ class _MilestoneSetupScreenState extends State<_MilestoneSetupScreen> {
           icon: Icons.arrow_forward_rounded,
           onTap: _create,
         ),
+      ],
+    );
+  }
+
+  /// Which part of their life this one belongs to.
+  ///
+  /// Every craft in the catalogue, not only the one on the profile, because the
+  /// whole point is that somebody has more than one. The profile's is first and
+  /// preselected — the common case stays one glance and no taps — and the rest
+  /// scroll horizontally rather than opening a picker, so choosing "singer"
+  /// when the profile says "engineer" costs a single tap.
+  Widget _craftChooser() {
+    final ordered = [
+      ...Professions.all.where((p) => p.id == widget.craft),
+      ...Professions.all.where((p) => p.id != widget.craft),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Which part of your life?',
+            style: TextStyle(
+                fontFamily: 'Outfit',
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: AppTheme.textSecondary)),
+        const SizedBox(height: 4),
+        const Text(
+          'Milestones are grouped by this, and the suggestions follow it. You '
+          'can run one for each.',
+          style: TextStyle(
+              fontFamily: 'Outfit',
+              fontSize: 11.5,
+              height: 1.45,
+              color: AppTheme.textMuted),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 38,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: ordered.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (_, i) {
+              final p = ordered[i];
+              final on = p.id == _craft;
+              final accent = Professions.accentFor(p.id);
+
+              return GestureDetector(
+                onTap: () => setState(() => _craft = p.id),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 140),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+                  decoration: BoxDecoration(
+                    color: on
+                        ? accent.withValues(alpha: 0.18)
+                        : Colors.white.withValues(alpha: 0.05),
+                    borderRadius: BorderRadius.circular(AppTheme.radiusPill),
+                    border: Border.all(
+                      color: on ? accent : AppTheme.border,
+                      width: on ? 1.4 : 1,
+                    ),
+                  ),
+                  child: Text('${p.emoji}  ${p.label}',
+                      style: TextStyle(
+                          fontFamily: 'Outfit',
+                          fontSize: 12,
+                          fontWeight: on ? FontWeight.w700 : FontWeight.w500,
+                          color: on
+                              ? AppTheme.textPrimary
+                              : AppTheme.textSecondary)),
+                ),
+              );
+            },
+          ),
+        ),
+
+        // The daily habit card in the journal is still driven by the profile's
+        // craft, so somebody who has never set one is offered that here — the
+        // milestone itself does not need it.
+        if (widget.craft == null || widget.craft!.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: GestureDetector(
+              onTap: widget.onSetUpCraft,
+              child: const Text(
+                'Set your daily practice too →',
+                style: TextStyle(
+                    fontFamily: 'Outfit',
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.primaryLight),
+              ),
+            ),
+          ),
       ],
     );
   }

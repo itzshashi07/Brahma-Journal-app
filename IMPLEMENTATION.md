@@ -273,6 +273,18 @@ screen is the feature:
    about focus and a wrong one about lives: somebody studying for an exam is
    also training for a race and also shipping a side project. The screen is a
    list; each milestone opens to its own steps and its own verdict.
+
+   **And each one belongs to a craft it is chosen with.** The `craft` stamp used
+   to be `profile.profession` — the single craft named at setup — so an engineer
+   who also sings had every milestone filed under engineering and was offered
+   system design courses while trying to record a song. The setup screen has a
+   chooser over the whole `Professions` catalogue with the profile's craft
+   preselected, so the common case is still no taps, and the list groups under a
+   heading per craft *only* when more than one is in play: two tracks read as
+   two tracks rather than as one list somebody is permanently behind on. The
+   daily habit card in the journal still follows the profile's single craft —
+   that half is a habit tracker with one checklist, and giving it several is a
+   separate change.
 2. **Then their own todos.** Add, tick, delete. Nothing else: no priorities, no
    sub-tasks, no dependencies. Anything more is a second job.
 3. **Then the analysis, and it is allowed to be bad news.** Percent done, steps
