@@ -51,6 +51,7 @@ import 'screens/products/products_screen.dart';
 import 'screens/products/create_product_screen.dart';
 import 'screens/notifications/notifications_screen.dart';
 import 'screens/notifications/create_announcement_screen.dart';
+import 'core/utils/notification_routes.dart';
 import 'services/notification_service.dart';
 import 'services/notification_center.dart';
 import 'services/firebase_messaging_service.dart';
@@ -170,16 +171,140 @@ class InnenFlowApp extends StatelessWidget {
         // notification instead of only being discoverable by opening a screen.
         ChangeNotifierProvider(create: (_) => NotificationCenter()),
       ],
-      child: Builder(
-        builder: (childContext) {
-          return MaterialApp.router(
-            title: 'InnenFlow',
-            debugShowCheckedModeBanner: false,
-            theme: AppTheme.darkTheme,
-            routerConfig: _buildRouter(childContext),
-          );
-        },
-      ),
+      child: const _AppRouter(),
+    );
+  }
+}
+
+/// The router, and the one place a tapped notification is turned into a screen.
+///
+/// Stateful for two reasons. The router is built **once** — it used to be
+/// rebuilt inside a `Builder`, which throws away the navigation stack every
+/// time that widget rebuilds — and the tap subscriptions need somewhere to live
+/// that is below the providers and above every screen.
+class _AppRouter extends StatefulWidget {
+  const _AppRouter();
+
+  @override
+  State<_AppRouter> createState() => _AppRouterState();
+}
+
+class _AppRouterState extends State<_AppRouter> {
+  late final GoRouter _router = _buildRouter(context);
+
+  StreamSubscription<String>? _localTaps;
+  StreamSubscription<String>? _pushTaps;
+  AuthProvider? _auth;
+
+  /// A tap that arrived before the app was ready to act on it.
+  ///
+  /// Everything worth opening is behind a session, and the redirect below sends
+  /// every route to `/` while auth is still resolving — so a tap during launch,
+  /// which is the common case for a notification tapped from cold, would be
+  /// swallowed by the splash screen. It is held until auth has settled and
+  /// pushed then.
+  String? _pending;
+
+  /// The last route opened and when, so the same tap arriving twice does not
+  /// push the screen twice. It genuinely arrives twice: a cold start reports
+  /// the launch notification through `getNotificationAppLaunchDetails` *and*,
+  /// on some Android versions, through the tap callback a moment later.
+  String? _lastRoute;
+  DateTime _lastAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  @override
+  void initState() {
+    super.initState();
+
+    _localTaps = NotificationService().taps.listen(_open);
+    _pushTaps = FirebaseMessagingService().notificationTaps.listen(_open);
+
+    _auth = context.read<AuthProvider>()..addListener(_flush);
+
+    // The splash routes with `go`, which *replaces* the stack — so a screen
+    // pushed while it is still on top is wiped the moment it hands over. The
+    // delegate notifies on every navigation, which is the signal that it has.
+    _router.routerDelegate.addListener(_flush);
+
+    // The notification that started the app, read after the first frame so the
+    // router exists to be navigated.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final route = await NotificationService().launchRoute();
+      if (route != null) _open(route);
+    });
+  }
+
+  @override
+  void dispose() {
+    _localTaps?.cancel();
+    _pushTaps?.cancel();
+    _auth?.removeListener(_flush);
+    _router.routerDelegate.removeListener(_flush);
+    super.dispose();
+  }
+
+  /// Where the app is right now, or '/' if the router has not settled.
+  String get _location {
+    try {
+      return _router.routerDelegate.currentConfiguration.uri.path;
+    } catch (_) {
+      return '/';
+    }
+  }
+
+  void _open(String raw) {
+    // An admin alert's route is written for the website in places, so it is
+    // translated rather than pushed — see core/utils/notification_routes.dart.
+    // Tried as an alert first, because the operator's reading of a path is the
+    // narrower one and a member never receives those routes at all.
+    final route = appRouteFor(raw, isAdminAlert: true) ?? appRouteFor(raw);
+    if (route == null) {
+      debugPrint('▶ notification tap: nothing in this app opens "$raw"');
+      return;
+    }
+
+    _pending = route;
+    _flush();
+  }
+
+  void _flush() {
+    final route = _pending;
+    if (route == null || !mounted) return;
+
+    final auth = _auth;
+    if (auth == null || auth.loading) return;
+
+    // Still on the splash or the onboarding, which navigate with `go`. Wait for
+    // the handover rather than pushing a screen that is about to be replaced.
+    final at = _location;
+    if (at == '/' || at.startsWith('/onboarding')) return;
+
+    // Not signed in: the redirect would bounce this to /welcome anyway, and
+    // dropping it is better than queueing a screen from a previous session to
+    // appear behind whoever signs in next.
+    _pending = null;
+    if (!auth.isAuthenticated) return;
+
+    final now = DateTime.now();
+    if (route == _lastRoute && now.difference(_lastAt).inSeconds < 3) return;
+    _lastRoute = route;
+    _lastAt = now;
+
+    // After the frame, because this can run from the router's own listener and
+    // navigating during a navigation is how "setState called during build"
+    // happens.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _router.push(route);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp.router(
+      title: 'InnenFlow',
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.darkTheme,
+      routerConfig: _router,
     );
   }
 

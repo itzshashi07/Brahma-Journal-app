@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/notification_routes.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/firebase_messaging_service.dart';
@@ -510,9 +511,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
             ],
           ),
           onTap: () {
-            if (notification.route != null && notification.route!.isNotEmpty) {
-              context.push(notification.route!);
-            }
+            // Through the same table as a tray tap. A broadcast's route is
+            // this app's already, but "the card and the notification for it go
+            // to the same place" is a property worth having by construction.
+            final route = appRouteFor(notification.route);
+            if (route != null) context.push(route);
           },
         ),
       );
@@ -861,21 +864,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
   }
 
   /// The screen in *this* app that answers an alert, or '' when there is none.
-  static String _alertDestination(String raw) {
-    switch (raw) {
-      case '/counselling/inbox':
-      case '/counselling':
-        return '/counselling/inbox';
-      case '/support':
-      case '/support-inbox':
-        return '/support-inbox';
-      case '/reports':
-        return '/reports';
-      default:
-        // '/admin' and anything else the website added. Nothing to open.
-        return '';
-    }
-  }
+  ///
+  /// The mapping itself lives in `core/utils/notification_routes.dart` because
+  /// a tap on the tray has to make exactly the same decision — one table, so
+  /// the two cannot disagree about where an alert goes.
+  static String _alertDestination(String raw) =>
+      appRouteFor(raw, isAdminAlert: true) ?? '';
 
   Future<List<Map<String, dynamic>>> _loadAdminAlerts() async {
     final body = await ApiService()

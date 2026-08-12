@@ -148,6 +148,45 @@ So every message arrives as data and is drawn through `NotificationService` on
 the `brahma_alerts_channel` the app already declares. One rendering path for
 local and remote notifications instead of two that drift.
 
+### Tapping a notification opens the thing it is about
+
+The consequence of the paragraph above that nobody followed through on: because
+every notification is drawn *by this app*, a tap on one is delivered by
+flutter_local_notifications and **not** by Firebase. `onMessageOpenedApp` never
+fires for these. The only handler that existed printed the payload and dropped
+it, and `FirebaseMessagingService.notificationTaps` — whose doc comment said
+"main.dart listens and pushes it onto the router" — had no subscriber at all. So
+tapping any notification opened the app on whatever screen it was last on.
+
+Three parts now, and all three are needed:
+
+- **`NotificationService.taps`** carries the payload — the route — from
+  `onDidReceiveNotificationResponse`.
+- **`NotificationService.launchRoute()`** reads
+  `getNotificationAppLaunchDetails()`. A tap on a dead app starts the process,
+  and the listener is registered milliseconds too late to catch the event; this
+  is the only way to see it. Without it the tap works from the background and
+  does nothing from cold, which is the state a phone is in when a notification
+  arrives overnight.
+- **`_AppRouter` in main.dart** is the single subscriber and holds the router.
+  It waits for auth to settle and for the splash to hand over — the splash
+  navigates with `go`, which *replaces* the stack, so a screen pushed before
+  then is wiped — and it ignores the same route arriving twice within three
+  seconds, because a cold start reports the launch notification through the
+  details *and* through the callback on some Android versions.
+
+Routes are translated through `core/utils/notification_routes.dart` rather than
+pushed as they stand. The API serves two clients and some of what it writes is a
+website path: a support alert says `/support`, which here is the member's own
+contact form rather than the operator's inbox, and a signup says `/admin`, which
+this app does not have. Unknown destinations open nothing instead of landing on
+GoRouter's error screen. The notifications screen uses the same table, so a card
+and the notification for it cannot disagree about where they go.
+
+Building the router in `_AppRouter`'s state also fixes a quieter bug: it used to
+be constructed inside a `Builder`, so every rebuild of that widget produced a new
+`GoRouter` and threw away the navigation stack.
+
 ### The anonymous board cannot identify anyone, including you
 
 A reflection carries no account identifier. Authorship lives in a separate

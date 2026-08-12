@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../models/app_notification.dart';
@@ -14,6 +16,31 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
 
   bool _isInitialized = false;
+
+  /// The route a tapped notification asked for.
+  ///
+  /// ─────────────────────────────────────────────────────────────────────────
+  /// Why the tap went nowhere
+  ///
+  /// Every message this app receives is data-only and is drawn *by this class*
+  /// through flutter_local_notifications — that is deliberate, and documented
+  /// in firebase_messaging_service.dart. The consequence nobody followed
+  /// through on: a tap on a locally-drawn notification is delivered by the
+  /// plugin, not by Firebase. `onMessageOpenedApp` never fires for these, so
+  /// the one handler that existed — `onDidReceiveNotificationResponse` —
+  /// printed the payload and dropped it, and tapping any notification did
+  /// nothing but open the app on whatever screen it was last on.
+  ///
+  /// The route is carried as the payload by [showNow]. main.dart listens here
+  /// and pushes it.
+  final _taps = StreamController<String>.broadcast();
+  Stream<String> get taps => _taps.stream;
+
+  void _onTapped(String? payload) {
+    final route = (payload ?? '').trim();
+    if (route.isEmpty) return;
+    _taps.add(route);
+  }
 
   // Initialize notifications
   Future<void> init() async {
@@ -38,16 +65,35 @@ class NotificationService {
 
     await _localNotifications.initialize(
       initializationSettings,
-      onDidReceiveNotificationResponse: (NotificationResponse response) {
-        // Handle tapping on notification if needed
-        print('Notification tapped: ${response.payload}');
-      },
+      onDidReceiveNotificationResponse: (NotificationResponse response) =>
+          _onTapped(response.payload),
     );
 
     _isInitialized = true;
 
     // Request permissions for Android 13+
     await requestPermissions();
+  }
+
+  /// The notification that started the app, if that is how it started.
+  ///
+  /// A tap on a notification while the app is dead launches the process, and
+  /// the plugin has nowhere to deliver the tap to — the listener above is
+  /// registered milliseconds later, by which time the event has been and gone.
+  /// It is held here instead, and this is the only way to read it. Without it
+  /// the tap works from the background and silently does nothing from cold,
+  /// which is the state a phone is in when a notification arrives overnight.
+  Future<String?> launchRoute() async {
+    try {
+      final details =
+          await _localNotifications.getNotificationAppLaunchDetails();
+      if (details?.didNotificationLaunchApp != true) return null;
+      final route = (details?.notificationResponse?.payload ?? '').trim();
+      return route.isEmpty ? null : route;
+    } catch (e) {
+      debugPrint('⚠️ Could not read the launch notification: $e');
+      return null;
+    }
   }
 
   // Request permissions
@@ -59,7 +105,7 @@ class NotificationService {
         await androidImplementation.requestNotificationsPermission();
       }
     } catch (e) {
-      print('Error requesting notification permissions: $e');
+      debugPrint('⚠️ Notification permission request failed: $e');
     }
   }
 
@@ -268,7 +314,9 @@ class NotificationService {
 
   // Clean up
   void dispose() {
-    // Nothing to tear down any more: the Firestore subscription this used to
-    // cancel is gone, and FCM's lifetime is owned by the platform.
+    // The Firestore subscription this used to cancel is gone and FCM's
+    // lifetime is owned by the platform. The tap stream is a singleton's and
+    // lives as long as the process, so it is deliberately not closed here —
+    // closing it would leave a running app unable to route a tap.
   }
 }
