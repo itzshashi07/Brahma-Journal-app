@@ -427,6 +427,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       tagline: 'Proof that you showed up',
                       accent: Color(0xFFDC2626),
                       cards: [
+                        _NavCard(icon: Icons.checklist_rounded, title: 'Deep Work', subtitle: 'Your plan, ticked daily', route: '/deep-work', color: Color(0xFF0EA5E9)),
                         _NavCard(icon: Icons.analytics_outlined, title: 'Your Patterns', subtitle: 'What the entries add up to', route: '/analytics', color: Color(0xFFDC2626)),
                         _NavCard(icon: Icons.people_outline, title: 'Streak Board', subtitle: 'Everyone still going', route: '/community', color: Color(0xFF7C3AED)),
                         _NavCard(icon: Icons.emoji_events_outlined, title: 'Game Ranks', subtitle: 'Top scores this week', route: '/games/leaderboard', color: Color(0xFFF59E0B)),

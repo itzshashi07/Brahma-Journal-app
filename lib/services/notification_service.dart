@@ -226,6 +226,17 @@ class NotificationService {
   Stream<List<Announcement>> streamAnnouncements() =>
       Stream.fromFuture(fetchAnnouncements());
 
+  /// Deletes a broadcast for the whole user base. Admin only, server-checked.
+  ///
+  /// The counterpart to [dismissNotification]: that one records "not for me"
+  /// and leaves the document alone, because a broadcast is one record everybody
+  /// reads. This removes the record itself, and the server drops every
+  /// dismissal filed against it on the way — they described a document that no
+  /// longer exists.
+  Future<void> deleteNotification(String notificationId) async {
+    await _api.delete('/api/notifications/$notificationId');
+  }
+
   Future<void> deleteAnnouncement(String announcementId) async {
     await _api.delete('/api/notifications/announcements/$announcementId');
   }

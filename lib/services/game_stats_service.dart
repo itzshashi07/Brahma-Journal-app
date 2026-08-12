@@ -122,10 +122,16 @@ class GameScoreRow {
   });
 
   factory GameScoreRow.fromJson(Map<String, dynamic> data) {
+    // `?? 'Friend'` alone was not enough: the rows written before the server
+    // learned the fallbacks carry an **empty string**, which is not null, so
+    // the board drew a rank, an avatar and no name at all. Blank and missing
+    // are the same thing to a reader, so they are the same thing here.
+    final name = (data['displayName'] ?? '').toString().trim();
+
     return GameScoreRow(
       uid: (data['firebaseUid'] ?? '').toString(),
       gameId: (data['gameId'] ?? '').toString(),
-      displayName: (data['displayName'] ?? 'Friend').toString(),
+      displayName: name.isEmpty ? 'Friend' : name,
       avatarId: data['avatarId']?.toString(),
       score: parseIntField(data['score']),
       plays: parseIntField(data['plays']),

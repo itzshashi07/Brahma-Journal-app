@@ -253,6 +253,50 @@ what happens next, the counsellor's last line if they have replied, and a button
 that goes there. With no session it renders nothing and the sheet reads exactly
 as before.
 
+### Deep work: the plan, and the fortnight behind it
+
+`screens/activities/deep_work_screen.dart`, at `/deep-work`.
+
+Naming a profession gave a member a row of chips on the journal — tap what you
+did today. That records the work and does not help them run it. What was missing
+was a plan of their own (the presets are written by somebody who has never met
+them) and a daily answer (a chip ticked yesterday tells you nothing; fourteen
+dots in a row tell you everything).
+
+So: steps the member writes, ticks daily, and sees as a two-week strip with the
+current run beside it. Adding, renaming and dropping steps is theirs; presets
+belong to the profession and cannot be deleted, because they come back when it
+is reselected and a delete that does not stay done is worse than no delete.
+
+**Nothing new was stored.** The steps are `profile.customHabits`, which the
+setup sheet has always written. Ticking one writes `craftDone` on today's
+journal entry, exactly as the chips do — so a step ticked here is ticked there,
+counts in the consistency chart, and is one number in analytics rather than two
+that disagree. An entry for today is created if there is not one: somebody who
+opens this screen and ticks a step has journalled by any reasonable definition.
+
+This is also what forced `JournalEntry.copyWith` to be fixed. It named only the
+sixteen scalar fields and silently dropped the eight list-and-map ones, so
+`copyWith(mood: 4)` returned an entry with no habits, no practices, no craft and
+no check-in. Nothing had ever called it, which is the only reason no journal was
+damaged.
+
+### Deleting a notification means deleting it
+
+Three feeds, and every one of them can now be emptied and stay empty.
+
+- **The X** on a broadcast or an announcement is a dismissal — a broadcast is
+  one document everybody reads, so removing it would remove it for the whole
+  user base. It is permanent for that member all the same: the server keeps the
+  record, every feed filters against it, and it survives a reinstall and a
+  second handset.
+- **The bin**, for an operator, is `DELETE /api/notifications/:id` and takes the
+  notification off everybody's feed for good. Announcements have had this;
+  the feed that actually raises the badge had no way to take anything back.
+- **Clear this list**, in the app bar, empties whichever tab is open. Twenty
+  taps is how "I deleted them and they came back" starts — somebody gives up
+  halfway and concludes it did not work.
+
 ### There is no member-facing update check
 
 "App Updates" is gone from the profile. An update check is the store's job, and

@@ -5,7 +5,6 @@ import '../../providers/auth_provider.dart';
 import '../../services/profile_service.dart';
 import '../../models/user_profile.dart';
 import '../../core/theme/app_theme.dart';
-import '../../services/api_service.dart';
 import '../../core/constants/app_constants.dart';
 import '../../widgets/avatar_editor.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -396,10 +395,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ],
                           ),
                         ),
-                        if (auth.isAdmin) ...[
-                          const SizedBox(height: 20),
-                          _buildAdminPanel(context),
-                        ],
+                        // The "Admin Control Panel" card that used to sit here
+                        // held one button, "Push New App Release", and it was
+                        // the second way to do the same job as "Publish this
+                        // build as latest" in the list above — two controls,
+                        // one `app_config/version` document, and no way to tell
+                        // from either which one had last written it. The list
+                        // item is the one that stayed: it is where the rest of
+                        // the operator's tools already are.
                         const SizedBox(height: 30),
 
                         // Was "Share Brahma with Friends". Until the app is on
@@ -497,149 +500,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildAdminPanel(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppTheme.bgCard,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF2D2D4E)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.admin_panel_settings_outlined, color: AppTheme.primary, size: 20),
-              SizedBox(width: 8),
-              Text(
-                'Admin Control Panel',
-                style: TextStyle(
-                  fontFamily: 'Outfit',
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () => _showPushUpdateDialog(context),
-              icon: const Icon(Icons.cloud_upload_outlined, size: 16, color: Colors.white),
-              label: const Text('Push New App Release', style: TextStyle(fontFamily: 'Outfit', color: Colors.white)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primary,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showPushUpdateDialog(BuildContext context) {
-    final versionCtrl = TextEditingController(text: '1.0.1');
-    final buildCtrl = TextEditingController(text: '2');
-    final notesCtrl = TextEditingController(text: 'Bug fixes and performance improvements 🚀');
-    bool forceUpdate = false;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: AppTheme.bgCard,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Push New App Update', style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary)),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: versionCtrl,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(labelText: 'Version (e.g. 1.0.1)'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: buildCtrl,
-                  keyboardType: TextInputType.number,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(labelText: 'Build Number (e.g. 2)'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: notesCtrl,
-                  maxLines: 2,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(labelText: 'Release Notes'),
-                ),
-                const SizedBox(height: 12),
-                CheckboxListTile(
-                  title: const Text('Force Update?', style: TextStyle(fontFamily: 'Outfit', color: Colors.white, fontSize: 14)),
-                  value: forceUpdate,
-                  onChanged: (val) {
-                    setDialogState(() {
-                      forceUpdate = val ?? false;
-                    });
-                  },
-                  activeColor: AppTheme.primary,
-                  contentPadding: EdgeInsets.zero,
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: () async {
-                try {
-                  final buildNum = int.tryParse(buildCtrl.text) ?? 1;
-                  // Through the API, which is admin-gated and drops its
-                  // cached copy of this key in the same request. `force_update`
-                  // is the one lever that can put a blocking banner on every
-                  // device, and a Firestore rule could only say "an admin may
-                  // write /app_config" — not what shape the value had to be.
-                  //
-                  // The server merges the object, matching the
-                  // `SetOptions(merge: true)` this replaced: a release that
-                  // omits a field must not erase the one already published.
-                  await ApiService().put('/api/support/config/version', {
-                    'value': {
-                      'latest_version': versionCtrl.text.trim(),
-                      'latest_build': buildNum,
-                      'release_notes': notesCtrl.text.trim(),
-                      'force_update': forceUpdate,
-                      'download_url':
-                          'https://appdistribution.firebase.google.com/testerapps/1:440787316408:android:38e64b73850e55b977ce4d',
-                      'updated_at': DateTime.now().toUtc().toIso8601String(),
-                    },
-                  });
-
-                  if (context.mounted) {
-                    Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Update published successfully! 🚀', style: TextStyle(fontFamily: 'Outfit')), backgroundColor: Colors.green),
-                    );
-                  }
-                } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Error publishing: $e')),
-                  );
-                }
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
-              child: const Text('Publish Release', style: TextStyle(color: Colors.white)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class _ProfileField extends StatelessWidget {

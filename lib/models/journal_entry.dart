@@ -230,11 +230,31 @@ class JournalEntry {
   /// or recorded minutes without the habit taps.
   bool get didCraft => craftDone.isNotEmpty || craftMinutes > 0;
 
+  /// A copy with some fields changed.
+  ///
+  /// ─────────────────────────────────────────────────────────────────────────
+  /// Every field is listed here on purpose
+  ///
+  /// This used to name only the sixteen scalar fields and quietly leave out the
+  /// eight list-and-map ones — `energyLevel`, `practices`, `influences`,
+  /// `habitsDone`, `challenges`, `checkIn`, `craftDone`, `craftMinutes`. They
+  /// were not passed through to the constructor either, so they fell back to
+  /// their empty defaults: `entry.copyWith(mood: 4)` returned an entry with the
+  /// new mood and **no habits, no practices, no craft and no check-in**, and
+  /// saving that would have erased the lot.
+  ///
+  /// Nothing called it, which is the only reason no journal was ever damaged by
+  /// it — a `copyWith` that silently drops half its object is a landmine for the
+  /// next caller, and the deep-work screen is the first one. A field added to
+  /// this class must be added here in the same commit.
   JournalEntry copyWith({
     String? id, String? uid, int? mood, String? newHabit, String? tinyStep,
     String? badHabit, String? affirmations, String? visualization,
     String? nightRoutine, String? triggerThought, String? triggerResponse,
     String? bestMoment, String? shivBabaLine, String? sleepReflection,
+    String? energyLevel, List<String>? practices, List<String>? influences,
+    List<String>? habitsDone, List<String>? challenges,
+    Map<String, String>? checkIn, List<String>? craftDone, int? craftMinutes,
     DateTime? createdAt, DateTime? updatedAt,
   }) {
     return JournalEntry(
@@ -245,6 +265,14 @@ class JournalEntry {
       triggerThought: triggerThought ?? this.triggerThought, triggerResponse: triggerResponse ?? this.triggerResponse,
       bestMoment: bestMoment ?? this.bestMoment, shivBabaLine: shivBabaLine ?? this.shivBabaLine,
       sleepReflection: sleepReflection ?? this.sleepReflection,
+      energyLevel: energyLevel ?? this.energyLevel,
+      practices: practices ?? this.practices,
+      influences: influences ?? this.influences,
+      habitsDone: habitsDone ?? this.habitsDone,
+      challenges: challenges ?? this.challenges,
+      checkIn: checkIn ?? this.checkIn,
+      craftDone: craftDone ?? this.craftDone,
+      craftMinutes: craftMinutes ?? this.craftMinutes,
       createdAt: createdAt ?? this.createdAt, updatedAt: updatedAt ?? this.updatedAt,
     );
   }

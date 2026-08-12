@@ -724,6 +724,17 @@ class _JournalScreenState extends State<JournalScreen> {
                   ],
                 ),
               ),
+              // The plan, and the daily picture of it. The chips below record
+              // today; this is where somebody goes to see the fortnight, add a
+              // step of their own, or drop one that is no longer the work.
+              GestureDetector(
+                onTap: () => context.push('/deep-work'),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 6),
+                  child: Icon(Icons.checklist_rounded,
+                      size: 18, color: AppTheme.textMuted),
+                ),
+              ),
               GestureDetector(
                 onTap: () async {
                   final done = await CraftSetupSheet.show(context);

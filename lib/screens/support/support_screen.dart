@@ -203,9 +203,17 @@ class _SupportScreenState extends State<SupportScreen> with SingleTickerProvider
                 labelColor: AppTheme.textPrimary,
                 unselectedLabelColor: AppTheme.textMuted,
                 labelStyle: const TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.w600, fontSize: 15),
+                // Contact first, and it is the tab that opens.
+                //
+                // Somebody arriving at a support screen has a problem they have
+                // already failed to solve; the FAQ is what they read while
+                // deciding whether to bother writing in. Putting the answers
+                // first made the way to reach a person the second thing on the
+                // screen, which is the wrong way round on the one screen in the
+                // product that exists because something went wrong.
                 tabs: const [
-                  Tab(text: 'FAQs'),
                   Tab(text: 'Contact Us'),
+                  Tab(text: 'FAQs'),
                 ],
               ),
               const SizedBox(height: 12),
@@ -214,49 +222,6 @@ class _SupportScreenState extends State<SupportScreen> with SingleTickerProvider
                 child: TabBarView(
                   controller: _tabCtrl,
                   children: [
-                    // FAQs Tab
-                    ListView.builder(
-                      padding: const EdgeInsets.all(16),
-                      itemCount: _faqs.length,
-                      itemBuilder: (ctx, i) {
-                        final faq = _faqs[i];
-                        return Container(
-                          margin: const EdgeInsets.only(bottom: 12),
-                          decoration: BoxDecoration(
-                            color: AppTheme.bgCard,
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: const Color(0xFF2D2D4E)),
-                          ),
-                          child: Theme(
-                            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-                            child: ExpansionTile(
-                              iconColor: AppTheme.primary,
-                              collapsedIconColor: AppTheme.textMuted,
-                              title: Text(
-                                faq['q']!,
-                                style: const TextStyle(
-                                  fontFamily: 'Outfit', fontSize: 14,
-                                  fontWeight: FontWeight.w600, color: AppTheme.textPrimary,
-                                ),
-                              ),
-                              children: [
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
-                                  child: Text(
-                                    faq['a']!,
-                                    style: const TextStyle(
-                                      fontFamily: 'Outfit', fontSize: 13,
-                                      color: AppTheme.textSecondary, height: 1.5,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-
                     // Contact Form Tab
                     SingleChildScrollView(
                       padding: const EdgeInsets.all(16),
@@ -405,6 +370,49 @@ class _SupportScreenState extends State<SupportScreen> with SingleTickerProvider
                         ),
                       ),
                     ),
+                    // FAQs Tab
+                    ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: _faqs.length,
+                      itemBuilder: (ctx, i) {
+                        final faq = _faqs[i];
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          decoration: BoxDecoration(
+                            color: AppTheme.bgCard,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: const Color(0xFF2D2D4E)),
+                          ),
+                          child: Theme(
+                            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                            child: ExpansionTile(
+                              iconColor: AppTheme.primary,
+                              collapsedIconColor: AppTheme.textMuted,
+                              title: Text(
+                                faq['q']!,
+                                style: const TextStyle(
+                                  fontFamily: 'Outfit', fontSize: 14,
+                                  fontWeight: FontWeight.w600, color: AppTheme.textPrimary,
+                                ),
+                              ),
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
+                                  child: Text(
+                                    faq['a']!,
+                                    style: const TextStyle(
+                                      fontFamily: 'Outfit', fontSize: 13,
+                                      color: AppTheme.textSecondary, height: 1.5,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+
                   ],
                 ),
               ),

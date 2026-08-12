@@ -96,6 +96,139 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
     }
   }
 
+  /// Clears whichever list is on screen.
+  ///
+  /// A dismissal, not a delete, on the two member feeds — a broadcast is one
+  /// document everybody reads, so removing it would remove it for the whole
+  /// user base. It is permanent for *this* member all the same: the server
+  /// keeps the record, every feed filters against it, and it survives a
+  /// reinstall and a second handset. See notification_service.dart.
+  ///
+  /// The operator queue is the exception, and clears by really deleting each
+  /// alert — those are work items belonging to whoever is on duty, and the
+  /// durable record is the session or the ticket they point at.
+  Future<void> _clearVisibleFeed() async {
+    final tab = _tabController.index;
+    final isAdminTab = tab == 2;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.bgCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(isAdminTab ? 'Clear the queue?' : 'Clear this list?',
+            style: const TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary)),
+        content: Text(
+          isAdminTab
+              ? 'Every alert here is deleted. The sessions and tickets they point at are not touched.'
+              : 'Everything currently in this list is removed for good — on this phone and on every other device you sign in on.',
+          style: const TextStyle(fontFamily: 'Outfit', fontSize: 13, color: AppTheme.textSecondary),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel', style: TextStyle(fontFamily: 'Outfit'))),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text('Clear',
+                style: TextStyle(fontFamily: 'Outfit', color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      if (isAdminTab) {
+        // One delete per alert, issued together. There is no bulk route for
+        // these and there should not be — an alert is a unit of work, and a
+        // server-side "delete everything" is one mis-tap away from losing a
+        // queue nobody has read.
+        final alerts = await (_adminAlerts ?? _loadAdminAlerts());
+        final ids = alerts
+            .map((a) => (a['_id'] ?? a['id'] ?? '').toString())
+            .where((id) => id.isNotEmpty);
+
+        await Future.wait(
+          ids.map((id) => ApiService().delete('/api/notifications/admin/$id')),
+        );
+        await _refreshAdminAlerts();
+      } else {
+        await _notificationService
+            .dismissAll(tab == 0 ? 'broadcast' : 'announcement');
+      }
+
+      if (!mounted) return;
+      setState(() => _feedVersion++);
+      context.read<NotificationCenter>().refresh();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not clear that just now.',
+              style: TextStyle(fontFamily: 'Outfit')),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  /// Deletes a broadcast for the entire user base. Admin only.
+  ///
+  /// The X beside it is the member's own "not for me"; this is "this should
+  /// not exist" — a test notification, or one pointing at an article that has
+  /// been taken down. Announcements have had it; the feed that actually raises
+  /// the badge had no way to take anything back at all.
+  Future<void> _confirmDeleteNotification(String id) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.bgCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Delete for everyone?',
+            style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary)),
+        content: const Text(
+          'This removes the notification from every member\'s feed, permanently. '
+          'It cannot be undone.',
+          style: TextStyle(fontFamily: 'Outfit', fontSize: 13, color: AppTheme.textSecondary),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel', style: TextStyle(fontFamily: 'Outfit'))),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text('Delete',
+                style: TextStyle(fontFamily: 'Outfit', color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _justDismissed.add(id));
+    try {
+      await _notificationService.deleteNotification(id);
+      if (!mounted) return;
+      setState(() => _feedVersion++);
+      context.read<NotificationCenter>().refresh();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _justDismissed.remove(id));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not delete: $e',
+              style: const TextStyle(fontFamily: 'Outfit')),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
   @override
   void dispose() {
     _pushSub?.cancel();
@@ -134,7 +267,20 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
                         textAlign: TextAlign.center,
                       ),
                     ),
-                    const SizedBox(width: 44), // balance back button
+                    // Clear the list this tab is showing.
+                    //
+                    // Deleting one at a time is fine for one; a member who has
+                    // been away for a fortnight is looking at twenty and wants
+                    // them gone, and tapping twenty × is how "I deleted them
+                    // and they are still there" starts — because it is slow
+                    // enough that somebody gives up halfway and concludes it
+                    // did not work.
+                    IconButton(
+                      icon: const Icon(Icons.playlist_remove_rounded,
+                          color: AppTheme.textMuted, size: 22),
+                      tooltip: 'Clear this list',
+                      onPressed: _clearVisibleFeed,
+                    ),
                   ],
                 ),
               ),
@@ -323,11 +469,27 @@ class _NotificationsScreenState extends State<NotificationsScreen> with SingleTi
               ),
             ],
           ),
-          trailing: IconButton(
-            icon: const Icon(Icons.close_rounded,
-                color: AppTheme.textMuted, size: 20),
-            tooltip: 'Remove',
-            onPressed: () => _dismiss('broadcast', notification.id),
+          // The same two-delete pattern the announcements tab has always had.
+          // The X is "not for me" and is permanent for this account on every
+          // device; the bin, for an operator, takes the notification off
+          // everybody's feed.
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.close_rounded,
+                    color: AppTheme.textMuted, size: 20),
+                tooltip: 'Remove from my list',
+                onPressed: () => _dismiss('broadcast', notification.id),
+              ),
+              if (context.read<AuthProvider>().isAdmin)
+                IconButton(
+                  icon: const Icon(Icons.delete_outline,
+                      color: Colors.redAccent, size: 20),
+                  tooltip: 'Delete for everyone',
+                  onPressed: () => _confirmDeleteNotification(notification.id),
+                ),
+            ],
           ),
           onTap: () {
             if (notification.route != null && notification.route!.isNotEmpty) {

@@ -32,6 +32,7 @@ import 'screens/gita/gita_screen.dart';
 import 'screens/affirmations/affirmations_screen.dart';
 import 'screens/community/community_screen.dart';
 import 'screens/anonymous_thoughts/anonymous_thoughts_screen.dart';
+import 'screens/activities/deep_work_screen.dart';
 import 'screens/analytics/analytics_screen.dart';
 import 'screens/profile/profile_screen.dart';
 import 'screens/support/support_screen.dart';
@@ -200,7 +201,7 @@ class InnenFlowApp extends StatelessWidget {
         // could be reached by deep link without signing in at all.
         const protectedRoutes = [
           '/dashboard', '/journal', '/meditation', '/affirmations', '/thoughts',
-          '/community', '/analytics', '/profile', '/support', '/blogs',
+          '/community', '/analytics', '/deep-work', '/profile', '/support', '/blogs',
           '/products', '/notifications', '/announcements', '/how-to-use',
           '/app-updates', '/support-inbox', '/gita', '/games', '/counselling',
           '/reports', '/delete-account',
@@ -291,6 +292,7 @@ class InnenFlowApp extends StatelessWidget {
         GoRoute(path: '/thoughts', builder: (ctx, _) => const AnonymousThoughtsScreen()),
         GoRoute(path: '/community', builder: (ctx, _) => const CommunityScreen()),
         GoRoute(path: '/analytics', builder: (ctx, _) => const AnalyticsScreen()),
+        GoRoute(path: '/deep-work', builder: (ctx, _) => const DeepWorkScreen()),
         GoRoute(path: '/profile', builder: (ctx, _) => const ProfileScreen()),
         GoRoute(path: '/support', builder: (ctx, _) => const SupportScreen()),
         GoRoute(path: '/support-inbox', builder: (ctx, _) => const SupportInboxScreen()),
