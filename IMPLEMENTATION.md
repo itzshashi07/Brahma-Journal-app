@@ -258,15 +258,21 @@ as before.
 `screens/activities/deep_work_screen.dart`, at `/deep-work`. The order on the
 screen is the feature:
 
-1. **The milestone first.** Everything else this app measures is a habit — did
-   you sit, did you write, did you practise. Habits answer "did you turn up",
-   which the journal and the streak already answer well, and cannot answer "is
-   the thing getting finished". For somebody working towards a job switch or an
+1. **Milestones first.** Everything else this app measures is a habit — did you
+   sit, did you write, did you practise. Habits answer "did you turn up", which
+   the journal and the streak already answer well, and cannot answer "is the
+   thing getting finished". For somebody working towards a job switch or an
    album that is the only question that matters. Suggestions are seeded from
    their craft, because "next milestone" is an intimidating blank and a
    recognisable one when phrased in their own work. A target date is optional
    and says so — inventing a deadline for somebody is how an app starts lying
    about urgency.
+
+   **As many as they actually have.** This ran one at a time for about a day, on
+   the reasoning that three current goals is a backlog. That is a fine opinion
+   about focus and a wrong one about lives: somebody studying for an exam is
+   also training for a race and also shipping a side project. The screen is a
+   list; each milestone opens to its own steps and its own verdict.
 2. **Then their own todos.** Add, tick, delete. Nothing else: no priorities, no
    sub-tasks, no dependencies. Anything more is a second job.
 3. **Then the analysis, and it is allowed to be bad news.** Percent done, steps
@@ -275,10 +281,18 @@ screen is the feature:
    date has passed and should be moved rather than carried as guilt. An app
    that only ever says "great job" is one nobody believes the third time.
 
-The milestone and todos are their own record (`/api/practice/milestones`); the
+The milestones and todos are their own record (`/api/practice/milestones`); the
 **days worked** come from the journal's `craftDone` by local calendar day, and
 ticking "deep work done today" here writes that same field. One definition of a
 working day, so this screen and the consistency chart cannot disagree.
+
+**Achievements are counted month by month**, by the server, in the member's own
+calendar — a strip at the top of the deep work list and a full card on
+analytics. Counted server-side rather than from the loaded list because that
+list is paged: a total derived from page one is right until somebody has more
+than a page of achievements and quietly wrong for ever after. Analytics is the
+only place that shows what has actually been *finished*, and finished things are
+what people forget they did.
 
 This is also what forced `JournalEntry.copyWith` to be fixed. It named only the
 sixteen scalar fields and silently dropped the eight list-and-map ones, so

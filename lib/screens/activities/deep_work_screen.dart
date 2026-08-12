@@ -12,38 +12,41 @@ import '../../services/milestone_service.dart';
 import '../../widgets/craft_setup_sheet.dart';
 import '../../widgets/sacred.dart';
 
-/// Deep work: one milestone, the steps under it, and whether it is on course.
+/// Deep work: the milestones being worked on, and whether they are on course.
 ///
 /// ─────────────────────────────────────────────────────────────────────────
 /// The order is the feature
 ///
-/// **Milestone first.** Everything else this app measures is a habit — did you
-/// sit, did you write, did you practise. Habits are the right unit for a streak
-/// and the wrong unit for work that is going somewhere: "practised forty days
-/// running" says nothing about whether the album exists. So the first question
-/// here is not "what will you do today", it is *what are you trying to finish*,
-/// and by when.
+/// **Milestones first.** Everything else this app measures is a habit — did you
+/// sit, did you write, did you practise. Habits answer "did you turn up", which
+/// the journal and the streak already answer well, and cannot answer "is the
+/// thing getting finished". For somebody working towards a job switch, an album
+/// or an exam that is the only question that matters.
 ///
-/// **Then the member's own todos.** The suggestions are seeded from their
-/// craft, and every one of them can be deleted; a list somebody else wrote is a
-/// list nobody does. Add, tick, remove — nothing else, because anything more is
-/// project management and this is meant to be opened for thirty seconds.
+/// **As many as they actually have.** This screen ran one milestone at a time
+/// for about a day, on the reasoning that three current goals is a backlog. That
+/// is a fine opinion about focus and a wrong one about lives: somebody studying
+/// for an exam is also training for a race and also shipping a side project.
+/// They all live here, each with its own steps and its own verdict.
 ///
-/// **Then the analysis, and it has to be honest.** Percentage done, what is
-/// left, days remaining, how many days of actual deep work went in over the
-/// last fortnight, and — the number people avoid — whether the current pace
-/// reaches the target date. An app that only ever says "great job" is one
-/// nobody believes the third time.
+/// **Then the member's own todos**, per milestone. Add, tick, delete, and
+/// nothing else — no priorities, no sub-tasks, no dependencies. Anything more is
+/// a second job.
+///
+/// **Then the analysis, and it is allowed to be bad news.** Percent done, steps
+/// left, days of real deep work in the last fortnight, the current run, and one
+/// sentence of verdict. An app that only ever says "great job" is one nobody
+/// believes the third time.
 ///
 /// ─────────────────────────────────────────────────────────────────────────
 /// Where the numbers come from
 ///
-/// The milestone and its todos are their own record (`/api/practice/milestones`
-/// — see models/Practice.js for why they are not habits). The *days worked* are
-/// the journal's, read from `craftDone` on each entry by local calendar day, so
-/// this screen and the consistency chart cannot disagree about what a day of
-/// deep work was. Ticking the daily practice here writes the same field the
-/// journal's chips write.
+/// The milestones and their todos are their own record
+/// (`/api/practice/milestones`). The *days worked* are the journal's, read from
+/// `craftDone` by local calendar day, so this screen and the consistency chart
+/// cannot disagree about what a day of deep work was. Achievements are counted
+/// by the server, month by month, and shown here and on the analytics screen —
+/// see `MilestoneService.achievements`.
 class DeepWorkScreen extends StatefulWidget {
   const DeepWorkScreen({super.key});
 
@@ -52,29 +55,17 @@ class DeepWorkScreen extends StatefulWidget {
 }
 
 class _DeepWorkScreenState extends State<DeepWorkScreen> {
-  final _milestones = MilestoneService();
-  final _todoCtrl = TextEditingController();
+  final _service = MilestoneService();
 
-  Milestone? _milestone;
+  List<Milestone> _milestones = const [];
+  AchievementHistory _achievements = const AchievementHistory(total: 0, months: []);
   bool _loading = true;
   String? _error;
-
-  /// Ids being written right now, so a second tap is ignored rather than racing
-  /// the first.
-  final Set<String> _busy = {};
-
-  static const _windowDays = 14;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
-  }
-
-  @override
-  void dispose() {
-    _todoCtrl.dispose();
-    super.dispose();
   }
 
   Future<void> _load() async {
@@ -85,16 +76,18 @@ class _DeepWorkScreenState extends State<DeepWorkScreen> {
     });
 
     try {
-      final all = await _milestones.all();
-      if (uid != null && mounted) {
-        // The entries back the "days worked" half of the analysis.
-        await context.read<JournalProvider>().loadEntries(uid);
-      }
+      // Issued together: the achievements count does not depend on the list,
+      // and the entries back the "days worked" half of every verdict.
+      final results = await Future.wait([
+        _service.all(),
+        _service.achievements(),
+        if (uid != null) context.read<JournalProvider>().loadEntries(uid),
+      ]);
+
       if (!mounted) return;
       setState(() {
-        _milestone = all.where((m) => m.isActive).isEmpty
-            ? null
-            : all.firstWhere((m) => m.isActive);
+        _milestones = results[0] as List<Milestone>;
+        _achievements = results[1] as AchievementHistory;
         _loading = false;
       });
     } catch (e) {
@@ -106,7 +99,533 @@ class _DeepWorkScreenState extends State<DeepWorkScreen> {
     }
   }
 
-  // ─────────────────────────── writes ───────────────────────────
+  List<Milestone> get _active =>
+      _milestones.where((m) => m.isActive).toList();
+
+  Future<void> _openDetail(Milestone milestone) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _MilestoneDetail(milestone: milestone),
+      ),
+    );
+    if (mounted) await _load();
+  }
+
+  Future<void> _newMilestone() async {
+    final craft = context.read<AuthProvider>().profile?.profession;
+
+    final created = await Navigator.of(context).push<Milestone>(
+      MaterialPageRoute(
+        builder: (_) => _MilestoneSetupScreen(
+          craft: craft,
+          onSetUpCraft: () => CraftSetupSheet.show(context),
+        ),
+      ),
+    );
+
+    if (created != null && mounted) {
+      await _load();
+      if (mounted) await _openDetail(created);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SacredBackdrop(
+        child: SafeArea(
+          child: Column(
+            children: [
+              _header(),
+              Expanded(
+                child: _loading
+                    ? const Center(
+                        child: CircularProgressIndicator(color: AppTheme.primary))
+                    : _error != null
+                        ? _errorState()
+                        : RefreshIndicator(
+                            onRefresh: _load,
+                            color: AppTheme.primary,
+                            backgroundColor: AppTheme.bgCard,
+                            child: _list(),
+                          ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      floatingActionButton: _loading || _active.isEmpty
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: _newMilestone,
+              backgroundColor: AppTheme.primary,
+              icon: const Icon(Icons.add_rounded, color: Colors.white),
+              label: const Text('New milestone',
+                  style: TextStyle(
+                      fontFamily: 'Outfit',
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600)),
+            ),
+    );
+  }
+
+  Widget _header() => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        child: Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.arrow_back_ios,
+                  color: AppTheme.textPrimary, size: 20),
+              onPressed: () => context.pop(),
+            ),
+            const Expanded(
+              child: Column(
+                children: [
+                  Text('Deep work',
+                      style: TextStyle(
+                          fontFamily: 'Outfit',
+                          fontSize: 19,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.textPrimary)),
+                  Text('What you are building',
+                      style: TextStyle(
+                          fontFamily: 'Outfit',
+                          fontSize: 11.5,
+                          color: AppTheme.textMuted)),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.insights_rounded,
+                  color: AppTheme.textMuted, size: 20),
+              tooltip: 'Your patterns',
+              onPressed: () => context.push('/analytics'),
+            ),
+          ],
+        ),
+      );
+
+  Widget _errorState() => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Could not load your milestones',
+                  style: TextStyle(
+                      fontFamily: 'Outfit',
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textPrimary)),
+              const SizedBox(height: 8),
+              Text(_error ?? '',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      fontFamily: 'Outfit', fontSize: 12, color: AppTheme.textMuted)),
+              const SizedBox(height: 16),
+              SacredButton(label: 'Try again', onTap: _load),
+            ],
+          ),
+        ),
+      );
+
+  Widget _list() {
+    final active = _active;
+    final journal = context.watch<JournalProvider>();
+    final workedDays = journal.entries
+        .where((e) => e.didCraft)
+        .map((e) => dayMarker(e.createdAt))
+        .toSet();
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 90),
+      children: [
+        if (_achievements.total > 0) _achievementStrip(),
+        if (_achievements.total > 0) const SizedBox(height: 18),
+
+        if (active.isEmpty)
+          _emptyState()
+        else ...[
+          Row(
+            children: [
+              const Text('In progress',
+                  style: TextStyle(
+                      fontFamily: 'Outfit',
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textPrimary)),
+              const Spacer(),
+              Text('${active.length}',
+                  style: const TextStyle(
+                      fontFamily: 'Outfit',
+                      fontSize: 12.5,
+                      color: AppTheme.textMuted)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ...active.map((m) => _milestoneTile(m, workedDays)),
+        ],
+      ],
+    );
+  }
+
+  /// Achievements, month by month, right where the work is.
+  ///
+  /// The full history lives on the analytics screen; this is the last three
+  /// months, because the question this screen answers is "am I finishing
+  /// things lately" rather than "what did I do in March".
+  Widget _achievementStrip() {
+    final months = _achievements.months.take(3).toList();
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.success.withValues(alpha: 0.09),
+        borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+        border: Border.all(color: AppTheme.success.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('🏆', style: TextStyle(fontSize: 15)),
+              const SizedBox(width: 7),
+              Text(
+                '${_achievements.total} achieved',
+                style: const TextStyle(
+                    fontFamily: 'Outfit',
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.textPrimary),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => context.push('/analytics'),
+                child: const Text('All of it →',
+                    style: TextStyle(
+                        fontFamily: 'Outfit',
+                        fontSize: 11.5,
+                        color: AppTheme.primaryLight)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ...months.map((month) => Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 108,
+                      child: Text(month.label,
+                          style: TextStyle(
+                              fontFamily: 'Outfit',
+                              fontSize: 12,
+                              fontWeight: month.isThisMonth
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                              color: month.isThisMonth
+                                  ? AppTheme.textPrimary
+                                  : AppTheme.textSecondary)),
+                    ),
+                    // A bar rather than only a number: three months of counts
+                    // side by side is a shape, and a shape is read faster than
+                    // three integers.
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(999),
+                        child: LinearProgressIndicator(
+                          value: (month.count /
+                                  (_achievements.busiest?.count ?? 1))
+                              .clamp(0.08, 1),
+                          minHeight: 7,
+                          backgroundColor: Colors.white.withValues(alpha: 0.06),
+                          valueColor:
+                              const AlwaysStoppedAnimation(AppTheme.success),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text('${month.count}',
+                        style: const TextStyle(
+                            fontFamily: 'Outfit',
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textPrimary)),
+                  ],
+                ),
+              )),
+        ],
+      ),
+    );
+  }
+
+  Widget _emptyState() => Padding(
+        padding: const EdgeInsets.only(top: 30),
+        child: Column(
+          children: [
+            const Text('🎯', style: TextStyle(fontSize: 34)),
+            const SizedBox(height: 14),
+            const Text(
+              'Nothing in progress',
+              style: TextStyle(
+                  fontFamily: 'Outfit',
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'A milestone is something you could hold up and say — that is '
+              'done. Set as many as you are actually working on; each one keeps '
+              'its own steps and its own honest verdict.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontFamily: 'Outfit',
+                  fontSize: 13,
+                  height: 1.6,
+                  color: AppTheme.textMuted),
+            ),
+            const SizedBox(height: 20),
+            SacredButton(
+              label: 'Set your first milestone',
+              icon: Icons.arrow_forward_rounded,
+              onTap: _newMilestone,
+            ),
+          ],
+        ),
+      );
+
+  /// One milestone, as a row on the list.
+  ///
+  /// Enough to decide whether to open it: how far along, how long is left, and
+  /// whether any work has gone in this week. Everything else is inside.
+  Widget _milestoneTile(Milestone m, Set<DateTime> workedDays) {
+    final accent = Professions.accentFor(m.craft);
+    final left = m.daysLeft;
+    final overdue = left != null && left < 0;
+    final thisWeek = workedDays
+        .where((d) => todayMarker().difference(d).inDays < 7)
+        .length;
+
+    return GestureDetector(
+      onTap: () => _openDetail(m),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(15),
+        decoration: BoxDecoration(
+          color: AppTheme.bgCard,
+          borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+          border: Border.all(color: accent.withValues(alpha: 0.32)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(m.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontFamily: 'Outfit',
+                          fontSize: 15.5,
+                          fontWeight: FontWeight.w700,
+                          height: 1.3,
+                          color: AppTheme.textPrimary)),
+                ),
+                const SizedBox(width: 10),
+                if (left != null)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: overdue
+                          ? AppTheme.danger.withValues(alpha: 0.2)
+                          : Colors.white.withValues(alpha: 0.06),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      overdue
+                          ? '${-left}d over'
+                          : left == 0
+                              ? 'today'
+                              : '${left}d left',
+                      style: TextStyle(
+                          fontFamily: 'Outfit',
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w700,
+                          color:
+                              overdue ? Colors.redAccent : AppTheme.textSecondary),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(999),
+              child: LinearProgressIndicator(
+                value: m.progress,
+                minHeight: 7,
+                backgroundColor: Colors.white.withValues(alpha: 0.07),
+                valueColor: AlwaysStoppedAnimation(accent),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Text(
+                  m.todos.isEmpty
+                      ? 'No steps yet'
+                      : '${m.doneCount} of ${m.todos.length} done',
+                  style: const TextStyle(
+                      fontFamily: 'Outfit',
+                      fontSize: 11.5,
+                      color: AppTheme.textSecondary),
+                ),
+                const Spacer(),
+                Text(
+                  thisWeek == 0
+                      ? 'nothing this week'
+                      : '$thisWeek day${thisWeek == 1 ? '' : 's'} this week',
+                  style: TextStyle(
+                      fontFamily: 'Outfit',
+                      fontSize: 11.5,
+                      color: thisWeek == 0 ? AppTheme.accent : AppTheme.textMuted),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One milestone, opened: the analysis, today's tick, and the todos.
+class _MilestoneDetail extends StatefulWidget {
+  final Milestone milestone;
+
+  const _MilestoneDetail({required this.milestone});
+
+  @override
+  State<_MilestoneDetail> createState() => _MilestoneDetailState();
+}
+
+class _MilestoneDetailState extends State<_MilestoneDetail> {
+  final _milestones = MilestoneService();
+  final _todoCtrl = TextEditingController();
+
+  late Milestone? _milestone = widget.milestone;
+
+  /// Ids being written right now, so a second tap is ignored rather than racing
+  /// the first.
+  final Set<String> _busy = {};
+
+  static const _windowDays = 14;
+
+  @override
+  void dispose() {
+    _todoCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final uid = context.read<AuthProvider>().user?.uid;
+    try {
+      final all = await _milestones.all();
+      if (uid != null && mounted) {
+        await context.read<JournalProvider>().loadEntries(uid);
+      }
+      if (!mounted) return;
+      final match = all.where((m) => m.id == widget.milestone.id);
+      setState(() => _milestone = match.isEmpty ? _milestone : match.first);
+    } catch (_) {
+      // The screen already has a milestone to render; a failed refresh is not
+      // worth replacing it with an error.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SacredBackdrop(
+        child: SafeArea(
+          child: Column(
+            children: [
+              _detailHeader(),
+              Expanded(
+                child: _milestone == null
+                    ? const SizedBox.shrink()
+                    : RefreshIndicator(
+                        onRefresh: _load,
+                        color: AppTheme.primary,
+                        backgroundColor: AppTheme.bgCard,
+                        child: _milestoneView(),
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _detailHeader() => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        child: Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.arrow_back_ios,
+                  color: AppTheme.textPrimary, size: 20),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+            const Expanded(
+              child: Text('Milestone',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontFamily: 'Outfit',
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textPrimary)),
+            ),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert_rounded,
+                  color: AppTheme.textMuted, size: 20),
+              color: AppTheme.bgCard,
+              onSelected: (value) async {
+                if (value == 'finish') await _finish();
+                if (value == 'drop') {
+                  await _milestones.update(_milestone!.id, status: 'dropped');
+                  if (mounted) Navigator.of(context).pop();
+                }
+                if (value == 'delete') {
+                  await _milestones.remove(_milestone!.id);
+                  if (mounted) Navigator.of(context).pop();
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(
+                    value: 'finish',
+                    child: Text('Mark achieved',
+                        style: TextStyle(
+                            fontFamily: 'Outfit', color: AppTheme.textPrimary))),
+                PopupMenuItem(
+                    value: 'drop',
+                    child: Text('Drop it',
+                        style: TextStyle(
+                            fontFamily: 'Outfit', color: AppTheme.textPrimary))),
+                PopupMenuItem(
+                    value: 'delete',
+                    child: Text('Delete',
+                        style: TextStyle(
+                            fontFamily: 'Outfit', color: Colors.redAccent))),
+              ],
+            ),
+          ],
+        ),
+      );
 
   Future<void> _saveTodos(List<MilestoneTodo> todos) async {
     final current = _milestone;
@@ -240,136 +759,12 @@ class _DeepWorkScreenState extends State<DeepWorkScreen> {
 
     if (confirmed != true || !mounted) return;
     await _milestones.update(current.id, status: 'achieved');
-    await _load();
+
+    // Back to the list, which reloads on return — an achieved milestone is not
+    // in progress any more, and leaving its detail on screen invites somebody
+    // to keep ticking steps on something they have just finished.
+    if (mounted) Navigator.of(context).pop();
   }
-
-  // ─────────────────────────── build ───────────────────────────
-
-  @override
-  Widget build(BuildContext context) {
-    final profile = context.watch<AuthProvider>().profile;
-
-    return Scaffold(
-      body: SacredBackdrop(
-        child: SafeArea(
-          child: Column(
-            children: [
-              _header(),
-              Expanded(
-                child: _loading
-                    ? const Center(
-                        child: CircularProgressIndicator(color: AppTheme.primary))
-                    : _error != null
-                        ? _errorState()
-                        : _milestone == null
-                            ? _MilestoneSetup(
-                                craft: profile?.profession,
-                                onCreated: (m) => setState(() => _milestone = m),
-                                onSetUpCraft: () async {
-                                  final done = await CraftSetupSheet.show(context);
-                                  if (done == true && mounted) setState(() {});
-                                },
-                              )
-                            : RefreshIndicator(
-                                onRefresh: _load,
-                                color: AppTheme.primary,
-                                backgroundColor: AppTheme.bgCard,
-                                child: _milestoneView(),
-                              ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _header() => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-        child: Row(
-          children: [
-            IconButton(
-              icon: const Icon(Icons.arrow_back_ios,
-                  color: AppTheme.textPrimary, size: 20),
-              onPressed: () => context.pop(),
-            ),
-            const Expanded(
-              child: Column(
-                children: [
-                  Text('Deep work',
-                      style: TextStyle(
-                          fontFamily: 'Outfit',
-                          fontSize: 19,
-                          fontWeight: FontWeight.w700,
-                          color: AppTheme.textPrimary)),
-                  Text('One milestone at a time',
-                      style: TextStyle(
-                          fontFamily: 'Outfit',
-                          fontSize: 11.5,
-                          color: AppTheme.textMuted)),
-                ],
-              ),
-            ),
-            if (_milestone != null)
-              PopupMenuButton<String>(
-                icon: const Icon(Icons.more_vert_rounded,
-                    color: AppTheme.textMuted, size: 20),
-                color: AppTheme.bgCard,
-                onSelected: (value) async {
-                  if (value == 'finish') await _finish();
-                  if (value == 'new') {
-                    setState(() => _milestone = null);
-                  }
-                  if (value == 'delete') {
-                    await _milestones.remove(_milestone!.id);
-                    await _load();
-                  }
-                },
-                itemBuilder: (_) => const [
-                  PopupMenuItem(
-                      value: 'finish',
-                      child: Text('Mark achieved',
-                          style: TextStyle(
-                              fontFamily: 'Outfit', color: AppTheme.textPrimary))),
-                  PopupMenuItem(
-                      value: 'new',
-                      child: Text('Set a different milestone',
-                          style: TextStyle(
-                              fontFamily: 'Outfit', color: AppTheme.textPrimary))),
-                  PopupMenuItem(
-                      value: 'delete',
-                      child: Text('Delete this milestone',
-                          style: TextStyle(
-                              fontFamily: 'Outfit', color: Colors.redAccent))),
-                ],
-              ),
-          ],
-        ),
-      );
-
-  Widget _errorState() => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Could not load your milestone',
-                  style: TextStyle(
-                      fontFamily: 'Outfit',
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: AppTheme.textPrimary)),
-              const SizedBox(height: 8),
-              Text(_error ?? '',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      fontFamily: 'Outfit', fontSize: 12, color: AppTheme.textMuted)),
-              const SizedBox(height: 16),
-              SacredButton(label: 'Try again', onTap: _load),
-            ],
-          ),
-        ),
-      );
 
   Widget _milestoneView() {
     final m = _milestone!;
@@ -839,27 +1234,30 @@ class _DeepWorkScreenState extends State<DeepWorkScreen> {
       .toSet();
 }
 
-/// Choosing the milestone. The first screen anybody sees here.
+
+/// Setting a milestone.
 ///
 /// Seeded from their craft, because "next milestone" is an intimidating blank
 /// for most people and a recognisable one when it is phrased in their own work.
 /// Every suggestion is editable — they fill the box rather than being chosen.
-class _MilestoneSetup extends StatefulWidget {
+///
+/// A pushed screen rather than an empty state, because there can be several
+/// milestones now: this is reached from the "+" as often as from having none.
+/// It pops with the milestone it created.
+class _MilestoneSetupScreen extends StatefulWidget {
   final String? craft;
-  final void Function(Milestone) onCreated;
   final VoidCallback onSetUpCraft;
 
-  const _MilestoneSetup({
+  const _MilestoneSetupScreen({
     required this.craft,
-    required this.onCreated,
     required this.onSetUpCraft,
   });
 
   @override
-  State<_MilestoneSetup> createState() => _MilestoneSetupState();
+  State<_MilestoneSetupScreen> createState() => _MilestoneSetupScreenState();
 }
 
-class _MilestoneSetupState extends State<_MilestoneSetup> {
+class _MilestoneSetupScreenState extends State<_MilestoneSetupScreen> {
   final _service = MilestoneService();
   final _titleCtrl = TextEditingController();
   final _whyCtrl = TextEditingController();
@@ -913,7 +1311,7 @@ class _MilestoneSetupState extends State<_MilestoneSetup> {
         craft: widget.craft ?? '',
         targetDate: _target,
       );
-      widget.onCreated(milestone);
+      if (mounted) Navigator.of(context).pop(milestone);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -932,6 +1330,42 @@ class _MilestoneSetupState extends State<_MilestoneSetup> {
   Widget build(BuildContext context) {
     final craft = Professions.byId(widget.craft);
 
+    return Scaffold(
+      body: SacredBackdrop(
+        child: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.arrow_back_ios,
+                          color: AppTheme.textPrimary, size: 20),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                    const Expanded(
+                      child: Text('New milestone',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              fontFamily: 'Outfit',
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.textPrimary)),
+                    ),
+                    const SizedBox(width: 44),
+                  ],
+                ),
+              ),
+              Expanded(child: _form(craft)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _form(Profession craft) {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
       children: [

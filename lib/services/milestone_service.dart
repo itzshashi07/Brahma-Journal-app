@@ -141,13 +141,41 @@ class MilestoneService {
 
   Future<List<Milestone>> all() async {
     try {
-      final body = await _api.get('/api/practice/milestones', query: {'limit': '30'});
+      final body = await _api.get('/api/practice/milestones', query: {'limit': '100'});
       return ((body?['milestones'] as List?) ?? const [])
           .map((m) => Milestone.fromJson(Map<String, dynamic>.from(m as Map)))
           .toList();
     } catch (e) {
       debugPrint('⚠️ Could not load milestones: $e');
       rethrow;
+    }
+  }
+
+  /// Achievements grouped by the month they were achieved in.
+  ///
+  /// Counted by the server rather than from [all], because that listing is
+  /// paged: a total computed from page one is right until somebody has more
+  /// than a page of achievements and quietly wrong for ever after.
+  ///
+  /// The timezone goes with the request — a month boundary is local, and
+  /// without it everything achieved in the first five and a half hours of an
+  /// Indian month is filed under the previous one.
+  Future<AchievementHistory> achievements() async {
+    try {
+      final tz = DateTime.now().timeZoneOffset.inMinutes;
+      final body = await _api.get('/api/practice/milestones/achievements',
+          query: {'tz': '$tz'});
+
+      return AchievementHistory(
+        total: (body?['total'] as num?)?.toInt() ?? 0,
+        months: ((body?['months'] as List?) ?? const [])
+            .map((m) => AchievementMonth.fromJson(
+                Map<String, dynamic>.from(m as Map)))
+            .toList(),
+      );
+    } catch (e) {
+      debugPrint('⚠️ Could not load achievements: $e');
+      return const AchievementHistory(total: 0, months: []);
     }
   }
 
@@ -193,4 +221,65 @@ class MilestoneService {
 
   Future<void> remove(String id) =>
       _api.delete('/api/practice/milestones/$id');
+}
+
+/// One month's achievements — how many, and which.
+class AchievementMonth {
+  /// 'yyyy-MM', in the member's own calendar.
+  final String month;
+  final int count;
+  final List<String> titles;
+
+  const AchievementMonth({
+    required this.month,
+    required this.count,
+    this.titles = const [],
+  });
+
+  factory AchievementMonth.fromJson(Map<String, dynamic> data) =>
+      AchievementMonth(
+        month: (data['month'] ?? '').toString(),
+        count: (data['count'] as num?)?.toInt() ?? 0,
+        titles: ((data['titles'] as List?) ?? const [])
+            .map((t) => t.toString())
+            .toList(),
+      );
+
+  /// 'August 2026'. Falls back to the raw key rather than throwing on anything
+  /// unexpected — a label is never worth an error screen.
+  String get label {
+    final parts = month.split('-');
+    if (parts.length != 2) return month;
+    final year = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    if (year == null || m == null || m < 1 || m > 12) return month;
+
+    const names = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December',
+    ];
+    return '${names[m - 1]} $year';
+  }
+
+  bool get isThisMonth {
+    final now = DateTime.now();
+    return month ==
+        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}';
+  }
+}
+
+class AchievementHistory {
+  final int total;
+  final List<AchievementMonth> months;
+
+  const AchievementHistory({required this.total, required this.months});
+
+  int get thisMonth =>
+      months.where((m) => m.isThisMonth).fold(0, (sum, m) => sum + m.count);
+
+  /// The best month, for the one line analytics leads with.
+  AchievementMonth? get busiest {
+    if (months.isEmpty) return null;
+    return months.reduce((a, b) => b.count > a.count ? b : a);
+  }
 }

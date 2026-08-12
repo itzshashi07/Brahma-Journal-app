@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../providers/auth_provider.dart';
+import '../../services/milestone_service.dart';
 import '../../providers/journal_provider.dart';
 import '../../models/journal_entry.dart';
 import '../../core/theme/app_theme.dart';
@@ -29,6 +30,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   final MeditationService _meditationService = MeditationService();
   final FocusService _focusService = FocusService();
   final GameStatsService _gameStats = GameStatsService();
+  final MilestoneService _milestones = MilestoneService();
   List<Map<String, dynamic>> _meditationSessions = [];
   bool _loadingMeditation = true;
 
@@ -36,6 +38,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   /// sessions live in a different collection. A puzzle is not practice.
   List<FocusSession> _focusSessions = [];
   Map<String, GameScoreRow> _gameBests = {};
+
+  /// Milestones achieved, month by month.
+  ///
+  /// Counted by the server rather than derived here — see
+  /// `MilestoneService.achievements` for why a client-side count of a paged
+  /// list is a number that goes quietly wrong after the first page.
+  AchievementHistory _achievements =
+      const AchievementHistory(total: 0, months: []);
 
   @override
   void initState() {
@@ -59,12 +69,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
     final results = await Future.wait([
       _focusService.sessions(uid),
       _gameStats.myRows(uid),
+      _milestones.achievements(),
     ]);
     if (!mounted) return;
     setState(() {
       _meditationSessions = sessions;
       _focusSessions = results[0] as List<FocusSession>;
       _gameBests = results[1] as Map<String, GameScoreRow>;
+      _achievements = results[2] as AchievementHistory;
       _loadingMeditation = false;
     });
   }
@@ -293,6 +305,11 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                           ),
                         ),
                         const SizedBox(height: 20),
+
+                        // Deep work achievements, month by month.
+                        _AchievementsCard(history: _achievements),
+                        if (_achievements.total > 0)
+                          const SizedBox(height: 20),
 
                         // Mood Chart
                         if (moodSpots.length >= 2) ...[
@@ -629,6 +646,151 @@ class _EntryTile extends StatelessWidget {
             const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Milestones achieved, month by month.
+///
+/// ─────────────────────────────────────────────────────────────────────────
+/// Why this belongs on the analytics screen and not only on the deep work one
+///
+/// Deep work shows what is *in progress*; this is the only place that shows
+/// what has actually been finished, and finished things are the thing people
+/// forget they did. A member three months into a hard stretch remembers the
+/// week they missed and not the two milestones they closed in March — the
+/// monthly count is the answer to that, and it is the one number here that
+/// says "this year was not nothing".
+///
+/// Renders nothing at all until there is a first achievement. An empty
+/// "0 achievements" card on the screen somebody opens to feel better about
+/// their month is worse than no card.
+class _AchievementsCard extends StatelessWidget {
+  final AchievementHistory history;
+
+  const _AchievementsCard({required this.history});
+
+  @override
+  Widget build(BuildContext context) {
+    if (history.total == 0) return const SizedBox.shrink();
+
+    final busiest = history.busiest;
+    // Twelve months is a year of history — enough to see a pattern, and past
+    // that the card becomes a scroll of its own.
+    final months = history.months.take(12).toList();
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppTheme.bgCard,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF2D2D4E)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('🏆', style: TextStyle(fontSize: 16)),
+              const SizedBox(width: 8),
+              const Text('Milestones achieved',
+                  style: TextStyle(
+                      fontFamily: 'Outfit',
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textPrimary,
+                      fontSize: 15)),
+              const Spacer(),
+              Text('${history.total}',
+                  style: const TextStyle(
+                      fontFamily: 'Outfit',
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.success,
+                      fontSize: 18)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            history.thisMonth > 0
+                ? '${history.thisMonth} this month'
+                : busiest == null
+                    ? ''
+                    : 'Best month so far: ${busiest.label} — ${busiest.count}',
+            style: const TextStyle(
+                fontFamily: 'Outfit', fontSize: 11.5, color: AppTheme.textMuted),
+          ),
+          const SizedBox(height: 16),
+          ...months.map((month) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        SizedBox(
+                          width: 112,
+                          child: Text(month.label,
+                              style: TextStyle(
+                                  fontFamily: 'Outfit',
+                                  fontSize: 12.5,
+                                  fontWeight: month.isThisMonth
+                                      ? FontWeight.w700
+                                      : FontWeight.w500,
+                                  color: month.isThisMonth
+                                      ? AppTheme.textPrimary
+                                      : AppTheme.textSecondary)),
+                        ),
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(999),
+                            child: LinearProgressIndicator(
+                              // Scaled against the best month, so the bars
+                              // compare with each other rather than with an
+                              // invented target nobody set.
+                              value: (month.count / (busiest?.count ?? 1))
+                                  .clamp(0.08, 1),
+                              minHeight: 8,
+                              backgroundColor:
+                                  Colors.white.withValues(alpha: 0.06),
+                              valueColor: const AlwaysStoppedAnimation(
+                                  AppTheme.success),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        SizedBox(
+                          width: 18,
+                          child: Text('${month.count}',
+                              textAlign: TextAlign.right,
+                              style: const TextStyle(
+                                  fontFamily: 'Outfit',
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.textPrimary)),
+                        ),
+                      ],
+                    ),
+                    // What they were. A count on its own is a scoreboard; the
+                    // titles are what makes somebody remember the month.
+                    if (month.titles.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 112, top: 4),
+                        child: Text(
+                          month.titles.take(3).join(' · ') +
+                              (month.titles.length > 3
+                                  ? ' · +${month.titles.length - 3} more'
+                                  : ''),
+                          style: const TextStyle(
+                              fontFamily: 'Outfit',
+                              fontSize: 11,
+                              height: 1.4,
+                              color: AppTheme.textMuted),
+                        ),
+                      ),
+                  ],
+                ),
+              )),
+        ],
       ),
     );
   }
