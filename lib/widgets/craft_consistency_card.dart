@@ -253,7 +253,12 @@ class _MonthGrid extends StatelessWidget {
     final practised = <DateTime>{};
     final journalled = <DateTime>{};
     for (final e in entries) {
-      final d = DateTime(e.createdAt.year, e.createdAt.month, e.createdAt.day);
+      // `.toLocal()` before the day is read: `createdAt` comes off the API as
+      // UTC, and without this an entry written after local midnight lights up
+      // yesterday's square instead of today's. See `dayMarker` in
+      // core/utils/stats_utils.dart.
+      final at = e.createdAt.toLocal();
+      final d = DateTime(at.year, at.month, at.day);
       journalled.add(d);
       if (e.didCraft) practised.add(d);
     }

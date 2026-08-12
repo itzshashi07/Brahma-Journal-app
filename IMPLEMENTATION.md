@@ -210,6 +210,57 @@ out of its own deletion.
   They used to be written by whichever handset made the change, so a killed app
   between the two left a session live with nothing explaining why.
 
+### A day is the member's local day — `dayMarker` in `core/utils/stats_utils.dart`
+
+Every streak, every "did I write today", every square on the consistency grid
+goes through `dayMarker`, and it used to read `.year/.month/.day` straight off
+whatever DateTime it was handed. The API answers with ISO strings ending in `Z`,
+so `DateTime.parse` returns a **UTC** DateTime — while `todayMarker()` read the
+components off `DateTime.now()`, which is local. Every comparison was a UTC day
+against a local one.
+
+East of Greenwich that quietly files anything written after local midnight under
+the previous day. In IST the window is 00:00–05:30, which for this product is not
+an edge case — it is the hour the whole thing is about. Measured on a real
+account: the dashboard said a 4-day streak where the server said 9, and showed
+"Today's Entry: Pending" for an entry written twenty minutes earlier. The four
+days it dropped were the four written after midnight.
+
+`dayMarker` now calls `.toLocal()` before reading the components (and still
+returns a UTC container, because `subtract(Duration(days: 1))` on a local
+DateTime lands on 23:00 across a DST boundary). `StreakService.parseDayKey`
+builds a **local** date for the same reason — as `DateTime.utc(y, m, d)` a
+recovered day came back as the previous day for anyone west of Greenwich, so the
+streak the recovery was bought to repair stayed broken. `CraftStats._day` and the
+consistency grid had the same shape and got the same fix.
+
+The server has always used the caller's real timezone offset (`tzOffset` in the
+backend's `routes/profile.js`), so it was right the whole time and the two
+disagreed on the same screen.
+
+### The 🤖 sheet shows the member their own session
+
+The assistant sheet on the dashboard is one thing for members and another for
+operators: `_AdminChatsPanel` for an admin — who is waiting, who has paid, who is
+mid-conversation — and the fee card plus "Connect Now" for everybody else.
+
+That second half told the same story to everybody, including the member who had
+already booked, already paid and was waiting to hear back. Their session was
+reachable (`/counselling` opens it rather than the intake form) but nothing on
+the sheet said so, so the icon that exists to tell somebody what is happening was
+the one place that did not. `_MySessionCard` is now the first card: the status,
+what happens next, the counsellor's last line if they have replied, and a button
+that goes there. With no session it renders nothing and the sheet reads exactly
+as before.
+
+### There is no member-facing update check
+
+"App Updates" is gone from the profile. An update check is the store's job, and
+what the screen actually did was tell a member the build they were running was
+the build they were running. The admin control that matters is still there —
+"Publish this build as latest" writes `app_config/version`, which is what
+prompts every other installation on next open.
+
 ---
 
 ## 5. Running it

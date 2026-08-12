@@ -94,6 +94,17 @@ class StreakService {
       '${day.month.toString().padLeft(2, '0')}-'
       '${day.day.toString().padLeft(2, '0')}';
 
+  /// The inverse of [dayKey], as a **local** date.
+  ///
+  /// `DateTime.utc(y, m, d)` was wrong here for the same reason the marker
+  /// helper was: a day key is a calendar day, not an instant, and everything
+  /// downstream normalises through `dayMarker`, which now reads local
+  /// components. West of Greenwich, UTC midnight on the 8th is the evening of
+  /// the 7th locally — so a recovered day came back as the day before the one
+  /// that was bought, and the streak it was meant to repair stayed broken.
+  ///
+  /// Built local, so the y/m/d that went into the key are the y/m/d that come
+  /// out of it, on every device.
   static DateTime? parseDayKey(String key) {
     final parts = key.split('-');
     if (parts.length != 3) return null;
@@ -101,7 +112,7 @@ class StreakService {
     final m = int.tryParse(parts[1]);
     final d = int.tryParse(parts[2]);
     if (y == null || m == null || d == null) return null;
-    return DateTime.utc(y, m, d);
+    return DateTime(y, m, d);
   }
 
   /// The days this member has already had forgiven.

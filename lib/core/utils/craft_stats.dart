@@ -73,7 +73,17 @@ class CraftStats {
     return a - b;
   }
 
-  static DateTime _day(DateTime d) => DateTime(d.year, d.month, d.day);
+  /// The member's local calendar day for an instant.
+  ///
+  /// `.toLocal()` first, for the reason spelled out on `dayMarker` in
+  /// core/utils/stats_utils.dart: an entry parsed from the API is a UTC
+  /// DateTime, and reading `.day` off it files anything written after local
+  /// midnight under the previous day. Here that split one late night's practice
+  /// across two cells of the consistency grid.
+  static DateTime _day(DateTime d) {
+    final local = d.toLocal();
+    return DateTime(local.year, local.month, local.day);
+  }
 
   /// Builds the picture from a member's entries.
   ///

@@ -275,19 +275,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   ],
                               ),
                               const SizedBox(height: 20),
-                              // The walkthrough is worth more than a one-time
-                              // first-run screen — people forget the daily loop
-                              // after a week away, so it stays reachable.
-                              ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.system_update_outlined, color: AppTheme.primary),
-                                title: const Text('App Updates',
-                                    style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
-                                subtitle: const Text('Check for a newer version',
-                                    style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textMuted, fontSize: 11)),
-                                trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
-                                onTap: () => context.push('/app-updates'),
-                              ),
+                              // "App Updates" used to sit here. It is gone from
+                              // the member's profile: an update check is the
+                              // store's job, the operator already announces a
+                              // build from the tile below, and a member tapping
+                              // it got a screen that could only ever tell them
+                              // they were already up to date.
+                              //
+                              // The walkthrough stays, and is worth more than a
+                              // one-time first-run screen — people forget the
+                              // daily loop after a week away.
                               ListTile(
                                 contentPadding: EdgeInsets.zero,
                                 leading: const Icon(Icons.auto_stories_outlined, color: AppTheme.primary),
@@ -295,8 +292,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
                                 onTap: () => context.push('/how-to-use'),
                               ),
-                              // Admin: announce the running build so every
-                              // installation is prompted to update on next open.
                               if (auth.isAdmin)
                                 ListTile(
                                   contentPadding: EdgeInsets.zero,
@@ -337,6 +332,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
                                   onTap: () => context.push('/reports'),
                                 ),
+                              // Admin: announce the running build so every
+                              // installation is prompted to update on next open.
+                              // This is the only update control left in the
+                              // app, and it is the one that does something —
+                              // the member-facing check that used to sit above
+                              // could only report what it was already running.
                               if (auth.isAdmin)
                                 ListTile(
                                   contentPadding: EdgeInsets.zero,

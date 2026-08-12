@@ -5,12 +5,40 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 /// app must go through [streakFromDates] — duplicated implementations are how
 /// the leaderboard and dashboard drifted apart.
 
-/// Normalizes any DateTime to a UTC midnight marker for that calendar day.
+/// Normalizes any DateTime to a UTC midnight marker for **the member's local
+/// calendar day**.
 ///
-/// UTC is deliberate: with local DateTimes, `subtract(Duration(days: 1))`
-/// across a DST boundary lands on 23:00 of the previous day, so day-to-day
-/// equality checks silently fail and the streak resets to 1.
-DateTime dayMarker(DateTime date) => DateTime.utc(date.year, date.month, date.day);
+/// Two separate things are going on in one line, and both matter.
+///
+/// **`.toLocal()` first.** This was the bug. The API answers with ISO strings
+/// ending in `Z`, and `DateTime.parse` on those returns a *UTC* DateTime — so
+/// reading `.year/.month/.day` straight off it filed every entry under its UTC
+/// calendar day, while [todayMarker] below read the components off
+/// `DateTime.now()`, which is local. Every comparison in this file was
+/// therefore between a UTC day and a local one.
+///
+/// East of Greenwich that quietly moves anything written after midnight to the
+/// day before. In IST the window is 00:00–05:30 — which is not an edge case for
+/// this app, it is the hour the whole product is about. A member who journals
+/// at 1am was told their entry was yesterday's: the dashboard showed "Today's
+/// Entry: Pending" for an entry they had just written, and the streak counted
+/// the two halves of one night as a gap. Measured on a real account it read 4
+/// where the server said 9, and the four days it lost were the four written
+/// after midnight.
+///
+/// The server has always used the caller's real timezone offset for this — see
+/// `tzOffset` in the backend's routes/profile.js — so the app was also the only
+/// one of the two getting it wrong, and the two numbers disagreed on the same
+/// screen.
+///
+/// **Then `DateTime.utc(...)`.** Still UTC, deliberately, for the arithmetic:
+/// with local DateTimes `subtract(Duration(days: 1))` across a DST boundary
+/// lands on 23:00 of the previous day, so day-to-day equality silently fails
+/// and the streak resets to 1. So: local components, UTC container.
+DateTime dayMarker(DateTime date) {
+  final local = date.toLocal();
+  return DateTime.utc(local.year, local.month, local.day);
+}
 
 /// Today as a day marker, in the device's local calendar.
 DateTime todayMarker() => dayMarker(DateTime.now());

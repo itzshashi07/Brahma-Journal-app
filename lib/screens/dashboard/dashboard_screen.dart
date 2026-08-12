@@ -596,6 +596,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
+                                // The member's own session, if they have one.
+                                //
+                                // This is what the bot was missing. The panel
+                                // told everybody the same thing — "book a
+                                // session" — including the person who had
+                                // already booked one, paid for it and was
+                                // waiting on a reply. "Connect Now" then pushed
+                                // /counselling, which does open their session,
+                                // but nothing on this sheet said so: the state
+                                // of the thing they were waiting for was
+                                // invisible from the icon that exists to tell
+                                // them about it. So the first card is theirs.
+                                _MySessionCard(
+                                  onOpen: () {
+                                    setState(() => _showChatbot = false);
+                                    context.push('/counselling');
+                                  },
+                                ),
+
                                 // Coming Soon Banner
                                 Container(
                                   width: double.infinity,
@@ -1206,6 +1225,184 @@ class _NavCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The member's own session, at the top of the 🤖 sheet.
+///
+/// ─────────────────────────────────────────────────────────────────────────
+/// What was wrong with the sheet without it
+///
+/// The 🤖 icon opened a panel that said the same thing to everybody: here is
+/// what a session costs, here is what you get, book one. Including to the
+/// member who had already booked one, already paid, and was waiting to hear
+/// back — the one person for whom "Connect Now" is not the question.
+///
+/// Their session existed and was reachable; `/counselling` opens it rather than
+/// the intake form. But nothing on the sheet said so, so the icon that exists
+/// to tell somebody what is happening was the one place that did not. Somebody
+/// who has just sent ₹299 and taps the assistant to find out where their
+/// session went should not be sold the session again.
+///
+/// So the first card is theirs: what state it is in, what happens next, what
+/// was last said and by whom, and a button that goes there. When there is no
+/// session it renders nothing at all and the panel reads exactly as before.
+class _MySessionCard extends StatefulWidget {
+  final VoidCallback onOpen;
+
+  const _MySessionCard({required this.onOpen});
+
+  @override
+  State<_MySessionCard> createState() => _MySessionCardState();
+}
+
+class _MySessionCardState extends State<_MySessionCard> {
+  final _service = CounsellingService();
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<CounsellingSession>>(
+      stream: _service.streamMine(),
+      builder: (context, snap) {
+        // No session, still loading, or an error nobody can act on: render
+        // nothing. A spinner or an error box above a panel whose whole purpose
+        // is "book a session" would be noise on the common path, which is
+        // somebody who has never booked one.
+        final open = (snap.data ?? const <CounsellingSession>[])
+            .where((s) => !s.isExpired && s.status != CounsellingStatus.ended)
+            .toList();
+        if (open.isEmpty) return const SizedBox.shrink();
+
+        final session = open.first;
+        final waitingOnMe = switch (session.status) {
+          // The two states where the member is the one holding it up. Said
+          // plainly, because "awaiting payment" reads to somebody as though
+          // the app is doing something rather than waiting for them.
+          CounsellingStatus.awaitingPayment => 'Pay ₹${session.amount} and send the reference — the chat opens after that.',
+          CounsellingStatus.approved => 'Your payment is verified. Choose chat or a video call.',
+          CounsellingStatus.paymentSubmitted => 'We are checking your payment by hand. This chat opens the moment it clears.',
+          CounsellingStatus.meetRequested => 'Your call is being arranged. The link will appear here.',
+          CounsellingStatus.active => 'Your session is live.',
+          CounsellingStatus.rejected => 'The payment could not be verified. Reply with the reference and somebody will look again.',
+          CounsellingStatus.ended => '',
+        };
+
+        // A reply from the counsellor is the thing worth surfacing on a
+        // dashboard — it is why somebody taps this icon at all.
+        final theyReplied = session.lastMessageBy == ChatSender.admin;
+
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 20),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theyReplied
+                  ? const Color(0xFF10B981).withOpacity(0.12)
+                  : AppTheme.primary.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: theyReplied
+                    ? const Color(0xFF10B981).withOpacity(0.45)
+                    : AppTheme.primary.withOpacity(0.35),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Text('🗓️', style: TextStyle(fontSize: 16)),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Your session',
+                      style: TextStyle(
+                          fontFamily: 'Outfit',
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.textPrimary),
+                    ),
+                    const Spacer(),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.25),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        session.status.label,
+                        style: const TextStyle(
+                            fontFamily: 'Outfit',
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.textSecondary),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  waitingOnMe,
+                  style: const TextStyle(
+                      fontFamily: 'Outfit',
+                      fontSize: 12.5,
+                      height: 1.5,
+                      color: AppTheme.textSecondary),
+                ),
+                if (theyReplied && session.lastMessagePreview.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.mark_chat_unread_outlined,
+                          size: 14, color: Color(0xFF10B981)),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'Counsellor: ${session.lastMessagePreview}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontFamily: 'Outfit',
+                              fontSize: 12,
+                              height: 1.4,
+                              color: AppTheme.textPrimary),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: widget.onOpen,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: theyReplied
+                          ? const Color(0xFF10B981)
+                          : AppTheme.primary,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    icon: const Icon(Icons.forum_outlined,
+                        size: 17, color: Colors.white),
+                    label: Text(
+                      theyReplied ? 'Read the reply' : 'Open my session',
+                      style: const TextStyle(
+                          fontFamily: 'Outfit',
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
