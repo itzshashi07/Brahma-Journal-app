@@ -80,8 +80,33 @@ class AuthProvider extends ChangeNotifier {
 
       _user = user;
       if (user != null) {
+        // The claim first, because `isAdmin` decides which routes exist and the
+        // router is about to run.
         await _refreshAdminClaim(user);
-        await _loadProfile(user.uid);
+
+        // Routing is unblocked *here*, on identity, and not after the profile
+        // has been fetched.
+        //
+        // ─────────────────────────────────────────────────────────────────
+        // Why: the splash that would not end
+        //
+        // `loading` is what the router reads to decide whether it knows enough
+        // to route — `if (isLoading) return '/'` sends every destination back
+        // to the splash. It used to stay true until the profile request came
+        // back, and that request goes to an API that sleeps on a free tier: a
+        // cold start is the better part of a minute. So after signing in the
+        // app sat on the splash, navigated, got bounced to '/', and did it
+        // again, until the profile finally landed. Reproduced on the emulator
+        // twice: signed in, then a splash that outlasted a fresh install.
+        //
+        // Who you are is known now. What your display name is can arrive a
+        // moment later — every screen already renders without it (the greeting
+        // falls back, the avatar draws its default), and none of them can be
+        // reached without a session anyway.
+        _loading = false;
+        notifyListeners();
+
+        unawaited(_loadProfile(user.uid));
       } else {
         _profile = null;
         _isAdmin = false;
@@ -301,37 +326,11 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  /// Signs in with an SMS code obtained via [AuthService.startPhoneVerification].
-  Future<bool> confirmSmsCode({
-    required String verificationId,
-    required String smsCode,
-  }) async {
-    try {
-      _error = null;
-      _loading = true;
-      notifyListeners();
-
-      final credential = await _authService.confirmSmsCode(
-        verificationId: verificationId,
-        smsCode: smsCode,
-      );
-      await _ensureProfileExists(credential.user!);
-      return true;
-    } on FirebaseAuthException catch (e) {
-      _error = e.code == 'invalid-verification-code'
-          ? 'That code is not correct. Please check and try again.'
-          : _mapAuthError(e.code);
-      _loading = false;
-      notifyListeners();
-      return false;
-    }
-  }
-
   /// Creates a profile document for accounts that arrive through a federated
   /// provider, which skip the email/password signup form entirely.
   ///
   /// Deliberately writes no entitlement fields — `premium` is server-only, so a
-  /// Google or phone account starts out exactly as unprivileged as any other.
+  /// Google account starts out exactly as unprivileged as any other.
   Future<void> _ensureProfileExists(User user) async {
     final existing = await _profileService.getProfile(user.uid);
     if (existing != null) return;

@@ -61,9 +61,18 @@ class AccountDeletionService {
       return null;
     } on FirebaseAuthException catch (e) {
       if (e.code == 'requires-recent-login') {
-        // Firebase refuses to delete an account authenticated long ago. This is
-        // the one error worth surfacing, because the member can fix it.
-        return 'Please sign out and sign in again, then try once more.';
+        // The sentinel, not a sentence.
+        //
+        // This used to return the message itself — "please sign out and sign in
+        // again" — while the screen tested `result == 'needs-reauth'` to decide
+        // whether to offer the password box. The two never matched, so the
+        // branch that lets somebody re-prove who they are *in place* was dead
+        // code, and every password account was sent out of the app and back in
+        // to do something the screen could already have handled.
+        //
+        // The screen owns the wording, because it is the half that knows
+        // whether a password box is on offer.
+        return 'needs-reauth';
       }
       return 'Your account could not be deleted. Please contact support.';
     } catch (e) {

@@ -61,48 +61,17 @@ class AuthService {
     return await _auth.signInWithCredential(credential);
   }
 
-  // ─────────────────────── phone / OTP ───────────────────────
-
-  /// Starts phone verification.
-  ///
-  /// [onCodeSent] receives the verification id needed by [confirmSmsCode].
-  /// [onAutoVerified] fires on Android when the SMS is auto-retrieved and the
-  /// user never has to type anything.
-  Future<void> startPhoneVerification({
-    required String phoneNumber,
-    required void Function(String verificationId, int? resendToken) onCodeSent,
-    required void Function(FirebaseAuthException error) onFailed,
-    void Function(UserCredential credential)? onAutoVerified,
-    int? resendToken,
-  }) async {
-    await _auth.verifyPhoneNumber(
-      phoneNumber: phoneNumber,
-      forceResendingToken: resendToken,
-      timeout: const Duration(seconds: 60),
-      verificationCompleted: (credential) async {
-        if (onAutoVerified == null) return;
-        try {
-          onAutoVerified(await _auth.signInWithCredential(credential));
-        } catch (_) {
-          // Fall through to manual entry.
-        }
-      },
-      verificationFailed: onFailed,
-      codeSent: onCodeSent,
-      codeAutoRetrievalTimeout: (_) {},
-    );
-  }
-
-  Future<UserCredential> confirmSmsCode({
-    required String verificationId,
-    required String smsCode,
-  }) async {
-    final credential = PhoneAuthProvider.credential(
-      verificationId: verificationId,
-      smsCode: smsCode.trim(),
-    );
-    return await _auth.signInWithCredential(credential);
-  }
+  // No phone / OTP.
+  //
+  // `startPhoneVerification` and `confirmSmsCode` lived here and are gone with
+  // the screen that called them. Phone was a *second identity* Firebase could
+  // not join to an existing one: somebody who signed up with an email and later
+  // tapped "Phone" was handed a new account with an empty journal and no route
+  // back to what they had written. It also bills per SMS and is the one sign-in
+  // a stranger can trigger against a number that is not theirs.
+  //
+  // Email and Google both resolve to one account per person, which is the
+  // property that actually matters here.
 
   // ─────────────────────── email link ───────────────────────
 

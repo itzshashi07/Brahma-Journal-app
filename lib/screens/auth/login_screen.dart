@@ -201,26 +201,23 @@ class _LoginScreenState extends State<LoginScreen>
                     const _OrDivider(),
                     const SizedBox(height: AppTheme.space5),
 
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _ProviderButton(
-                            label: 'Google',
-                            iconChild: const _GoogleGlyph(),
-                            busy: _googleBusy,
-                            onTap: _signInWithGoogle,
-                          ),
-                        ),
-                        const SizedBox(width: AppTheme.space3),
-                        Expanded(
-                          child: _ProviderButton(
-                            label: 'Phone',
-                            iconChild: const Icon(Icons.sms_outlined,
-                                size: 20, color: AppTheme.primaryLight),
-                            onTap: () => context.push('/phone-login'),
-                          ),
-                        ),
-                      ],
+                    // Google, and only Google.
+                    //
+                    // Phone sign-in is gone. It was a second identity that
+                    // could not be joined to an existing account: somebody who
+                    // signed up with an email and later tapped Phone got a
+                    // *new* account with an empty journal and no way back to
+                    // the entries they had written. SMS also costs money per
+                    // message and is the one route somebody else can trigger
+                    // on a number that is not theirs.
+                    //
+                    // Two ways in are enough, and both of them land on the same
+                    // account every time.
+                    _ProviderButton(
+                      label: 'Continue with Google',
+                      iconChild: const _GoogleGlyph(),
+                      busy: _googleBusy,
+                      onTap: _signInWithGoogle,
                     ),
 
                     const SizedBox(height: AppTheme.space8),

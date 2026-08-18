@@ -16,7 +16,6 @@ import 'screens/splash/splash_screen.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/signup_screen.dart';
 import 'screens/auth/forgot_password_screen.dart';
-import 'screens/auth/phone_login_screen.dart';
 import 'screens/auth/welcome_screen.dart';
 import 'screens/dashboard/dashboard_screen.dart';
 import 'screens/journal/journal_screen.dart';
@@ -367,7 +366,9 @@ class _AppRouterState extends State<_AppRouter> {
         GoRoute(path: '/login', builder: (ctx, _) => const LoginScreen()),
         GoRoute(path: '/signup', builder: (ctx, _) => const SignupScreen()),
         GoRoute(path: '/forgot-password', builder: (ctx, _) => const ForgotPasswordScreen()),
-        GoRoute(path: '/phone-login', builder: (ctx, _) => const PhoneLoginScreen()),
+        // No '/phone-login'. Phone sign-in is gone — see the note on the
+        // provider button in login_screen.dart. The route goes with it, so
+        // the screen cannot be reached by a stale deep link either.
         GoRoute(path: '/dashboard', builder: (ctx, _) => const DashboardScreen()),
         GoRoute(
           path: '/journal',

@@ -200,6 +200,22 @@ class _DashboardScreenState extends State<DashboardScreen>
     await Future<void>.delayed(const Duration(milliseconds: 450));
     if (!mounted) return;
 
+    // And a moment more for the name, if it has not landed yet.
+    //
+    // Routing no longer waits on the profile — it waits on identity, so that a
+    // slow API cannot strand somebody on the splash (see the note in
+    // AuthProvider). The consequence is that this card can open before the
+    // profile does, and it would then greet a returning member by the front
+    // half of their email address for as long as they left it open. This is a
+    // one-shot modal with somebody's name in 28pt type; it is worth a second
+    // and a half of waiting, and it is bounded so a failed profile fetch cannot
+    // hold the greeting hostage.
+    final until = DateTime.now().add(const Duration(milliseconds: 1500));
+    while (auth.profile == null && DateTime.now().isBefore(until)) {
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      if (!mounted) return;
+    }
+
     await WelcomeCelebration.show(
       context,
       name: auth.profile?.displayName ??
