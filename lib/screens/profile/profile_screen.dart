@@ -405,11 +405,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         // the operator's tools already are.
                         const SizedBox(height: 30),
 
-                        // Was "Share Brahma with Friends". Until the app is on
-                        // a store, sharing it hands someone a link they cannot
-                        // install from — an invitation that fails. The
-                        // community is where they can actually be told when
-                        // that changes.
+                        // The community, not a share sheet.
+                        //
+                        // This was "Share Brahma with Friends" and became this
+                        // because there was no store link to share. There is
+                        // one now — but the button stays, because the two do
+                        // different jobs: a share sheet hands somebody a link,
+                        // and this is where the people already using the app
+                        // hear what is coming and say what is broken. A share
+                        // action belongs next to it, not instead of it.
                         SizedBox(
                           width: double.infinity,
                           child: ElevatedButton.icon(
@@ -426,8 +430,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ),
                         const SizedBox(height: 6),
                         const Text(
-                          'InnenFlow is not on the Play Store yet. The community is '
-                          'where new builds and updates are announced first.',
+                          // Deliberately says nothing about where the app is
+                          // distributed. The line it replaces — "InnenFlow is
+                          // not on the Play Store yet" — was true for exactly
+                          // as long as it took to publish, and a build already
+                          // on somebody's phone cannot correct itself.
+                          'New builds, what is coming next, and the fastest way '
+                          'to tell us something is broken.',
                           textAlign: TextAlign.center,
                           style: TextStyle(fontFamily: 'Outfit', fontSize: 11.5, height: 1.5, color: AppTheme.textMuted),
                         ),
