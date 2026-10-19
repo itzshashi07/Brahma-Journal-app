@@ -5,6 +5,7 @@ import 'attention_games.dart';
 import 'memory_games.dart';
 import 'puzzle_games.dart';
 import 'reflex_games.dart';
+import 'pocket_games.dart';
 
 /// One list of games, read by both the Game Zone and the meditation section.
 ///
@@ -347,6 +348,23 @@ const kGames = <GameEntry>[
     unit: 'ms',
     builder: _breathRhythm,
   ),
+  GameEntry(id: 'tic_garden', title: 'Tic-Tac Garden', subtitle: 'Three in a row against a thoughtful opponent', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.grid_3x3, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.logic, difficulty: 1, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _TicGarden),
+  GameEntry(id: 'four_in_row', title: 'Four in a Row', subtitle: 'Drop, connect, and spot the next threat', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.view_module, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.logic, difficulty: 2, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _FourInRow),
+  GameEntry(id: 'lights_out', title: 'Quiet Lights', subtitle: 'A little switch puzzle with a satisfying finish', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.lightbulb_outline, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.logic, difficulty: 2, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _LightsOut),
+  GameEntry(id: 'merge_2048', title: 'Merge 2048', subtitle: 'Build a bigger number, one considered move at a time', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.apps, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.logic, difficulty: 2, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _Merge2048),
+  GameEntry(id: 'maze_trail', title: 'Maze Trail', subtitle: 'Find a calm route through a fresh maze', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.route, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.calm, difficulty: 1, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _MazeTrail),
+  GameEntry(id: 'mine_garden', title: 'Hidden Stones', subtitle: 'Use the numbers to uncover the safe garden', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.yard_outlined, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.logic, difficulty: 2, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _MineGarden),
+  GameEntry(id: 'mini_sudoku', title: 'Mini Sudoku', subtitle: 'A pocket-sized number puzzle for every age', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.grid_on, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.logic, difficulty: 2, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _MiniSudoku),
+  GameEntry(id: 'word_hunt', title: 'Word Hunt', subtitle: 'Three good words hiding in a letter garden', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.search, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.focus, difficulty: 1, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _WordHunt),
+  GameEntry(id: 'number_path', title: 'Number Path', subtitle: 'Find the next step in a number pattern', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.linear_scale, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.logic, difficulty: 1, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _NumberPath),
+  GameEntry(id: 'missing_sign', title: 'Missing Sign', subtitle: 'Choose the operation that makes it work', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.calculate_outlined, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.logic, difficulty: 1, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _MissingSign),
+  GameEntry(id: 'fraction_friends', title: 'Fraction Friends', subtitle: 'Small fractions, clear comparisons', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.pie_chart_outline, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.logic, difficulty: 2, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _FractionFriends),
+  GameEntry(id: 'word_connections', title: 'Word Connections', subtitle: 'Spot the word that belongs somewhere else', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.category_outlined, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.logic, difficulty: 1, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _WordConnections),
+  GameEntry(id: 'logic_ladder', title: 'Logic Ladder', subtitle: 'Everyday clues. One careful conclusion.', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.psychology_outlined, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.logic, difficulty: 2, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _LogicLadder),
+  GameEntry(id: 'shape_count', title: 'Shape Safari', subtitle: 'Find and count a shape in a little crowd', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.interests_outlined, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.focus, difficulty: 1, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _ShapeCount),
+  GameEntry(id: 'mirror_match', title: 'Mirror Match', subtitle: 'Picture a reflection before you choose', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.flip, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.memory, difficulty: 2, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _MirrorMatch),
+  GameEntry(id: 'direction_trail', title: 'Direction Trail', subtitle: 'Follow the arrows in your mind', detail: 'Short rounds with clear instructions, pause controls and a fresh puzzle when you return.', icon: Icons.explore_outlined, colors: [Color(0xFF5D46B8), Color(0xFF163E48)], lane: GameLane.memory, difficulty: 2, duration: '2–5 min', lowerIsBetter: false, unit: 'points', builder: _DirectionTrail),
+
 ];
 
 // Torn-off builders, because a const list cannot hold closures.
@@ -511,3 +529,20 @@ class GameZoneFootnote extends StatelessWidget {
     );
   }
 }
+
+Widget _TicGarden(BuildContext _) => const PocketGame(id: 'tic_garden', title: 'Tic-Tac Garden');
+Widget _FourInRow(BuildContext _) => const PocketGame(id: 'four_in_row', title: 'Four in a Row');
+Widget _LightsOut(BuildContext _) => const PocketGame(id: 'lights_out', title: 'Quiet Lights');
+Widget _Merge2048(BuildContext _) => const PocketGame(id: 'merge_2048', title: 'Merge 2048');
+Widget _MazeTrail(BuildContext _) => const PocketGame(id: 'maze_trail', title: 'Maze Trail');
+Widget _MineGarden(BuildContext _) => const PocketGame(id: 'mine_garden', title: 'Hidden Stones');
+Widget _MiniSudoku(BuildContext _) => const PocketGame(id: 'mini_sudoku', title: 'Mini Sudoku');
+Widget _WordHunt(BuildContext _) => const PocketGame(id: 'word_hunt', title: 'Word Hunt');
+Widget _NumberPath(BuildContext _) => const PocketGame(id: 'number_path', title: 'Number Path');
+Widget _MissingSign(BuildContext _) => const PocketGame(id: 'missing_sign', title: 'Missing Sign');
+Widget _FractionFriends(BuildContext _) => const PocketGame(id: 'fraction_friends', title: 'Fraction Friends');
+Widget _WordConnections(BuildContext _) => const PocketGame(id: 'word_connections', title: 'Word Connections');
+Widget _LogicLadder(BuildContext _) => const PocketGame(id: 'logic_ladder', title: 'Logic Ladder');
+Widget _ShapeCount(BuildContext _) => const PocketGame(id: 'shape_count', title: 'Shape Safari');
+Widget _MirrorMatch(BuildContext _) => const PocketGame(id: 'mirror_match', title: 'Mirror Match');
+Widget _DirectionTrail(BuildContext _) => const PocketGame(id: 'direction_trail', title: 'Direction Trail');

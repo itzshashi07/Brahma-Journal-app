@@ -1,3 +1,4 @@
+import 'real_life_cards.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -21,6 +22,7 @@ class GitaScreen extends StatefulWidget {
 class _GitaScreenState extends State<GitaScreen> {
   GitaSituation? _filter;
   bool _hindi = false;
+  bool _everyday = true;
 
   @override
   void initState() {
@@ -52,42 +54,59 @@ class _GitaScreenState extends State<GitaScreen> {
           child: Column(
             children: [
               SacredAppBar(
-                title: _hindi ? 'जीवन के लिए ज्ञान' : 'Wisdom for Real Life',
-                subtitle: _hindi
-                    ? '${verses.length} श्लोक'
-                    : '${verses.length} verses',
+                title: 'Wisdom for Real Life',
+                subtitle: _everyday
+                    ? 'Small ideas for everyday moments'
+                    : _hindi
+                        ? '${verses.length} श्लोक'
+                        : '${verses.length} verses',
                 onBack: () => context.pop(),
-                action: _LanguageToggle(
-                  hindi: _hindi,
-                  onChanged: _setLanguage,
-                ),
-              ),
-
-              _SituationFilter(
-                selected: _filter,
-                hindi: _hindi,
-                onChanged: (s) => setState(() => _filter = s),
-              ),
-
-              Expanded(
-                child: verses.isEmpty
-                    ? Center(
-                        child: Text(
-                          _hindi
-                              ? 'इस विषय पर अभी कोई श्लोक नहीं'
-                              : 'No verses for this yet',
-                          style: const TextStyle(
-                              fontFamily: 'Outfit', color: AppTheme.textMuted),
-                        ),
-                      )
-                    : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(AppTheme.space4, 0,
-                            AppTheme.space4, AppTheme.space8),
-                        itemCount: verses.length,
-                        itemBuilder: (_, i) =>
-                            _VerseCard(verse: verses[i], hindi: _hindi),
+                action: _everyday
+                    ? null
+                    : _LanguageToggle(
+                        hindi: _hindi,
+                        onChanged: _setLanguage,
                       ),
               ),
+              Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                  child: SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(value: true, label: Text('Everyday life')),
+                      ButtonSegment(value: false, label: Text('Gita verses'))
+                    ],
+                    selected: {_everyday},
+                    onSelectionChanged: (v) =>
+                        setState(() => _everyday = v.first),
+                  )),
+              if (_everyday) const Expanded(child: RealLifeCards()),
+              if (!_everyday)
+                _SituationFilter(
+                  selected: _filter,
+                  hindi: _hindi,
+                  onChanged: (s) => setState(() => _filter = s),
+                ),
+              if (!_everyday)
+                Expanded(
+                  child: verses.isEmpty
+                      ? Center(
+                          child: Text(
+                            _hindi
+                                ? 'इस विषय पर अभी कोई श्लोक नहीं'
+                                : 'No verses for this yet',
+                            style: const TextStyle(
+                                fontFamily: 'Outfit',
+                                color: AppTheme.textMuted),
+                          ),
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.fromLTRB(AppTheme.space4, 0,
+                              AppTheme.space4, AppTheme.space8),
+                          itemCount: verses.length,
+                          itemBuilder: (_, i) =>
+                              _VerseCard(verse: verses[i], hindi: _hindi),
+                        ),
+                ),
             ],
           ),
         ),
@@ -302,7 +321,8 @@ class _VerseCardState extends State<_VerseCard> {
               decoration: BoxDecoration(
                 color: AppTheme.primary.withValues(alpha: 0.07),
                 borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-                border: Border.all(color: AppTheme.primary.withValues(alpha: 0.20)),
+                border:
+                    Border.all(color: AppTheme.primary.withValues(alpha: 0.20)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

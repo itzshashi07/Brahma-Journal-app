@@ -100,7 +100,7 @@ class _AnonymousThoughtsScreenState extends State<AnonymousThoughtsScreen> {
         );
       }
     } finally {
-      setState(() => _isPosting = false);
+      if (mounted) setState(() => _isPosting = false);
     }
   }
 
@@ -288,7 +288,7 @@ class _AnonymousThoughtsScreenState extends State<AnonymousThoughtsScreen> {
                       const SizedBox(height: 4),
                       const Text(
                         'Your identity is protected with a generated name. '
-                        'Reflections are deleted a month after they are posted.',
+                        'Reflections are deleted a month after they are posted. Do not share names, phone numbers, school details or other identifying information.',
                         style: TextStyle(fontFamily: 'Outfit', fontSize: 12, color: AppTheme.textMuted, height: 1.4),
                       ),
                       const SizedBox(height: 12),

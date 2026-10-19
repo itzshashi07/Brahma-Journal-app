@@ -1,3 +1,4 @@
+import 'widgets/adult_community_gate.dart';
 import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kReleaseMode;
@@ -28,7 +29,8 @@ import 'screens/meditation/technique_player_screen.dart';
 import 'screens/games/game_leaderboard_screen.dart';
 import 'screens/games/game_zone_screen.dart';
 import 'screens/gita/gita_screen.dart';
-import 'screens/affirmations/affirmations_screen.dart';
+import 'screens/gratitude/small_wins_screen.dart';
+import 'screens/admin/accounts_screen.dart';
 import 'screens/community/community_screen.dart';
 import 'screens/anonymous_thoughts/anonymous_thoughts_screen.dart';
 import 'screens/activities/deep_work_screen.dart';
@@ -51,6 +53,7 @@ import 'screens/products/create_product_screen.dart';
 import 'screens/notifications/notifications_screen.dart';
 import 'screens/notifications/create_announcement_screen.dart';
 import 'core/utils/notification_routes.dart';
+import 'core/utils/route_access.dart';
 import 'services/notification_service.dart';
 import 'services/notification_center.dart';
 import 'services/firebase_messaging_service.dart';
@@ -164,7 +167,10 @@ class InnenFlowApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider()),
-        ChangeNotifierProvider(create: (_) => JournalProvider()),
+        ChangeNotifierProxyProvider<AuthProvider, JournalProvider>(
+          create: (_) => JournalProvider(),
+          update: (_, auth, journal) => journal!..setUser(auth.user?.uid),
+        ),
         // Watches the broadcast feed, the operator alerts and the member's own
         // counselling threads, so a request or a reply raises a real
         // notification instead of only being discoverable by opening a screen.
@@ -313,52 +319,12 @@ class _AppRouterState extends State<_AppRouter> {
       refreshListenable: context.read<AuthProvider>(),
       redirect: (ctx, state) {
         final auth = ctx.read<AuthProvider>();
-        final isAuth = auth.isAuthenticated;
-        final isLoading = auth.loading;
-        final loc = state.matchedLocation;
-
-        if (isLoading) return '/';
-
-        // Every route that shows user data requires a session. /blogs,
-        // /products and /notifications were missing from this list, so their
-        // screens — including the admin-only create screens beneath them —
-        // could be reached by deep link without signing in at all.
-        const protectedRoutes = [
-          '/dashboard', '/journal', '/meditation', '/affirmations', '/thoughts',
-          '/community', '/analytics', '/deep-work', '/profile', '/support', '/blogs',
-          '/products', '/notifications', '/announcements', '/how-to-use',
-          '/app-updates', '/support-inbox', '/gita', '/games', '/counselling',
-          '/reports', '/delete-account',
-        ];
-        final isProtected = protectedRoutes.any((r) => loc.startsWith(r));
-        if (isProtected && !isAuth) return '/welcome';
-
-        // Admin-only surfaces. The screens themselves also check isAdmin and
-        // Firestore rules reject the writes regardless — this is the first of
-        // the three, not the only one.
-        // NOT '/blogs/create'. Writing an article is open to every member —
-        // firestore.rules stamps the author from the session and only lets them
-        // edit or delete their own post. Listing it here was the whole bug:
-        // the Sanctuary showed a "Write" button to everyone and this redirect
-        // bounced them straight back to the dashboard when they pressed it.
-        const adminRoutes = [
-          '/products/create', '/announcements/create', '/support-inbox',
-          '/counselling/inbox', '/reports',
-        ];
-        if (adminRoutes.any((r) => loc.startsWith(r)) && !auth.isAdmin) {
-          return '/dashboard';
-        }
-
-        // The counselling room belongs to the member. An admin opening it
-        // landed on the intake form — which asked the counsellor for their own
-        // name, age, phone and reason for seeking help, then offered to charge
-        // them ₹299 to talk to themselves. Their way in is the inbox, where
-        // every request and every live chat already is.
-        if (loc == '/counselling' && auth.isAdmin) return '/counselling/inbox';
-
-        if ((loc == '/welcome' || loc == '/login' || loc == '/signup') && isAuth) return '/dashboard';
-
-        return null;
+        return routeAccessRedirect(
+          location: state.matchedLocation,
+          initializing: auth.initializing,
+          authenticated: auth.isAuthenticated,
+          admin: auth.isAdmin,
+        );
       },
       routes: [
         GoRoute(path: '/', builder: (ctx, _) => const SplashScreen()),
@@ -414,8 +380,10 @@ class _AppRouterState extends State<_AppRouter> {
           ),
         ),
         GoRoute(path: '/gita', builder: (ctx, _) => const GitaScreen()),
-        GoRoute(path: '/affirmations', builder: (ctx, _) => const AffirmationsScreen()),
-        GoRoute(path: '/thoughts', builder: (ctx, _) => const AnonymousThoughtsScreen()),
+        GoRoute(path: '/affirmations', redirect: (ctx, state) => '/small-wins'),
+        GoRoute(path: '/small-wins', builder: (ctx, _) => const SmallWinsScreen()),
+        GoRoute(path: '/admin/accounts', builder: (ctx, _) => const AdminAccountsScreen()),
+        GoRoute(path: '/thoughts', builder: (ctx, _) => const AdultCommunityGate(child: AnonymousThoughtsScreen())),
         GoRoute(path: '/community', builder: (ctx, _) => const CommunityScreen()),
         GoRoute(path: '/analytics', builder: (ctx, _) => const AnalyticsScreen()),
         GoRoute(path: '/deep-work', builder: (ctx, _) => const DeepWorkScreen()),

@@ -61,17 +61,18 @@ class CounsellingService {
   ApiFeed<List<CounsellingSession>>? _mine;
   ApiFeed<List<CounsellingSession>>? _all;
   final Map<String, ApiFeed<List<ChatMessage>>> _transcripts = {};
+  final Map<String, ApiFeed<CounsellingSession?>> _sessionsById = {};
 
   Stream<List<CounsellingSession>> streamMine() {
     if (_uid == null) return Stream.value(const []);
-    _mine ??= ApiFeed(_loadMine, debugLabel: 'counselling/mine');
+    _mine ??= ApiFeed(_loadMine, reportErrors: true, debugLabel: 'counselling/mine');
     return _mine!.stream;
   }
 
   /// Every session, for the admin inbox. The server refuses this to anyone
   /// without the claim, so there is no privilege asserted here.
   Stream<List<CounsellingSession>> streamAll() {
-    _all ??= ApiFeed(_loadAll, debugLabel: 'counselling/inbox');
+    _all ??= ApiFeed(_loadAll, reportErrors: true, debugLabel: 'counselling/inbox');
     return _all!.stream;
   }
 
@@ -80,18 +81,16 @@ class CounsellingService {
       sessionId,
       () => ApiFeed(
         () => _loadMessages(sessionId),
-        debugLabel: 'counselling/messages',
+        reportErrors: true, debugLabel: 'counselling/messages',
       ),
     );
     return feed.stream;
   }
 
   /// One session, re-read whenever a push says something moved.
-  Stream<CounsellingSession?> streamSession(String id) =>
-      ApiFeed<CounsellingSession?>(
-        () => session(id),
-        debugLabel: 'counselling/session',
-      ).stream;
+  Stream<CounsellingSession?> streamSession(String id) => _sessionsById.putIfAbsent(id,
+    () => ApiFeed<CounsellingSession?>(() => session(id), reportErrors: true,
+      debugLabel: 'counselling/session')).stream;
 
   Future<CounsellingSession?> session(String id) async {
     try {
@@ -145,6 +144,8 @@ class CounsellingService {
   /// push that announces it.
   Future<void> refresh({String? sessionId}) async {
     await Future.wait([
+      if (sessionId != null && _sessionsById.containsKey(sessionId))
+        _sessionsById[sessionId]!.refresh(),
       if (_mine != null) _mine!.refresh(),
       if (_all != null) _all!.refresh(),
       if (sessionId != null && _transcripts.containsKey(sessionId))
@@ -316,6 +317,8 @@ class CounsellingService {
       await feed.dispose();
     }
     _transcripts.clear();
+    for (final feed in _sessionsById.values) { await feed.dispose(); }
+    _sessionsById.clear();
     _mine = null;
     _all = null;
   }

@@ -79,7 +79,17 @@ class _BreathingMandalaState extends State<BreathingMandala>
     _ctrl = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 120),
-    )..repeat();
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _ctrl.stop();
+    } else if (!_ctrl.isAnimating) {
+      _ctrl.repeat();
+    }
   }
 
   @override
@@ -316,54 +326,44 @@ class SacredButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final enabled = onTap != null && !loading;
 
-    final content = Row(
-      mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        if (loading)
-          const SizedBox(
-            width: 18,
-            height: 18,
-            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-          )
-        else ...[
-          if (icon != null) ...[
-            Icon(icon, size: 18, color: secondary ? AppTheme.primaryLight : Colors.white),
-            const SizedBox(width: AppTheme.space2),
-          ],
-          Text(
-            label,
-            style: TextStyle(
-              fontFamily: 'Outfit',
-              fontSize: 15.5,
-              fontWeight: FontWeight.w600,
-              color: secondary ? AppTheme.primaryLight : Colors.white,
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: loading ? '$label, loading' : label,
+      excludeSemantics: true,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: secondary ? null : AppTheme.primaryGradient,
+          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+        ),
+        child: ElevatedButton(
+          onPressed: enabled ? onTap : null,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: secondary ? AppTheme.bgCard : Colors.transparent,
+            disabledBackgroundColor: Colors.transparent,
+            shadowColor: Colors.transparent,
+            foregroundColor: secondary ? AppTheme.primaryLight : Colors.white,
+            minimumSize: Size(expand ? double.infinity : 0, 52),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppTheme.radiusMd),
+              side: secondary ? const BorderSide(color: AppTheme.border) : BorderSide.none,
             ),
           ),
-        ],
-      ],
-    );
-
-    return Opacity(
-      opacity: enabled ? 1 : 0.55,
-      child: GestureDetector(
-        onTap: enabled ? onTap : null,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.symmetric(
-            vertical: AppTheme.space4,
-            horizontal: AppTheme.space6,
-          ),
-          decoration: BoxDecoration(
-            gradient: secondary ? null : AppTheme.primaryGradient,
-            color: secondary ? Colors.white.withValues(alpha: 0.04) : null,
-            borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-            border: secondary
-                ? Border.all(color: AppTheme.primary.withValues(alpha: 0.45))
-                : null,
-            boxShadow: secondary || !enabled ? null : AppTheme.glow(AppTheme.primary),
-          ),
-          child: content,
+          child: loading
+              ? const SizedBox(width: 20, height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : Row(
+                  mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if (icon != null) ...[
+                      Icon(icon, size: 20),
+                      const SizedBox(width: 8),
+                    ],
+                    Flexible(child: Text(label, textAlign: TextAlign.center)),
+                  ],
+                ),
         ),
       ),
     );

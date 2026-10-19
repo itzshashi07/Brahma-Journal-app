@@ -17,7 +17,7 @@ class AppTheme {
   // Text Colors
   static const Color textPrimary = Color(0xFFF8F8FF);
   static const Color textSecondary = Color(0xFFB0B0CC);
-  static const Color textMuted = Color(0xFF6B6B8A);
+  static const Color textMuted = Color(0xFF9999B2);
 
   // Mood Colors
   static const Color moodVerySad = Color(0xFF6366F1);

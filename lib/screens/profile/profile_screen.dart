@@ -6,6 +6,7 @@ import '../../services/profile_service.dart';
 import '../../models/user_profile.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/constants/app_constants.dart';
+import '../../core/constants/counselling.dart';
 import '../../widgets/avatar_editor.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/app_update_service.dart';
@@ -64,7 +65,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _selectedGender = profile.gender;
       }
     }
-    setState(() => _isLoading = false);
+    if (mounted) setState(() => _isLoading = false);
   }
 
   /// Admin: announce the running build as the latest available.
@@ -171,7 +172,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     } finally {
-      setState(() => _isSaving = false);
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
@@ -291,6 +292,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
                                 onTap: () => context.push('/how-to-use'),
                               ),
+                              if (auth.isAdmin) ListTile(
+                                leading: const Icon(Icons.manage_accounts_outlined, color: AppTheme.primaryLight),
+                                title: const Text('Manage users'),
+                                subtitle: const Text('Search accounts, reset data or manage access'),
+                                onTap: () => context.push('/admin/accounts'),
+                              ),
                               if (auth.isAdmin)
                                 ListTile(
                                   contentPadding: EdgeInsets.zero,
@@ -306,13 +313,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               // support inbox because a payment waiting on
                               // verification is time-critical in a way a
                               // general enquiry is not.
-                              if (auth.isAdmin)
+                              if (auth.isAdmin && Counselling.enabled)
                                 ListTile(
                                   contentPadding: EdgeInsets.zero,
                                   leading: const Icon(Icons.psychology_alt_outlined, color: AppTheme.accent),
                                   title: const Text('Counselling Sessions',
                                       style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
-                                  subtitle: const Text('Verify payments, join calls, reply in chat',
+                                  subtitle: const Text('Approve requests and reply in private chat',
                                       style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textMuted, fontSize: 11)),
                                   trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: AppTheme.textMuted),
                                   onTap: () => context.push('/counselling/inbox'),

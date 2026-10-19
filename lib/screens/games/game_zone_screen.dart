@@ -39,7 +39,7 @@ class _GameZoneScreenState extends State<GameZoneScreen> {
             children: [
               SacredAppBar(
                 title: 'Game Zone',
-                subtitle: '${kGames.length} games · attention, trained sideways',
+                subtitle: '${kGames.length} games · a little play, a little pause',
                 onBack: () => context.pop(),
                 action: IconButton(
                   tooltip: 'Leaderboard',
@@ -103,6 +103,7 @@ class _GameZoneScreenState extends State<GameZoneScreen> {
                         ],
                       ),
                     ),
+                    const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Text('Pick a short round. Pause anytime. Scores are just for fun.', style: TextStyle(color: AppTheme.textSecondary, height: 1.5))),
                     for (final game in games) GameCard(game: game),
                     const SizedBox(height: AppTheme.space2),
                     const GameZoneFootnote(),

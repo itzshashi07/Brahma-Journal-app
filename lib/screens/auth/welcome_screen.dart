@@ -3,49 +3,8 @@ import 'package:go_router/go_router.dart';
 import '../../core/theme/app_theme.dart';
 import '../../widgets/sacred.dart';
 
-class WelcomeScreen extends StatefulWidget {
+class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({super.key});
-
-  @override
-  State<WelcomeScreen> createState() => _WelcomeScreenState();
-}
-
-class _WelcomeScreenState extends State<WelcomeScreen>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1400))
-      ..forward();
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  /// Staggered entrance: each element fades and rises slightly, offset from the
-  /// last. Everything arriving at once reads as a screenshot; a short stagger
-  /// reads as an app.
-  Widget _staggered({required int index, required Widget child}) {
-    final start = (index * 0.12).clamp(0.0, 0.7);
-    final anim = CurvedAnimation(
-      parent: _ctrl,
-      curve: Interval(start, (start + 0.45).clamp(0.0, 1.0), curve: Curves.easeOutCubic),
-    );
-    return AnimatedBuilder(
-      animation: anim,
-      builder: (_, c) => Opacity(
-        opacity: anim.value,
-        child: Transform.translate(offset: Offset(0, 24 * (1 - anim.value)), child: c),
-      ),
-      child: child,
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -53,125 +12,120 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       body: SacredBackdrop(
         showMandala: false,
         child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppTheme.space6),
-            child: Column(
-              children: [
-                const Spacer(flex: 2),
-
-                // Hero: the mandala turns slowly behind a lotus mark.
-                _staggered(
-                  index: 0,
-                  child: SizedBox(
-                    height: 210,
-                    width: 210,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        const BreathingMandala(size: 210, opacity: 0.22),
-                        Container(
-                          width: 108,
-                          height: 108,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: AppTheme.primaryGradient,
-                            boxShadow:
-                                AppTheme.glow(AppTheme.primary, strength: 0.5),
-                          ),
-                          child: const Center(
-                            child: Motif(SacredMotif.lotus,
-                                size: 58, color: Colors.white),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: AppTheme.space8),
-
-                _staggered(
-                  index: 1,
-                  child: const Text(
-                    'InnenFlow',
-                    style: TextStyle(
-                      fontFamily: 'Outfit',
-                      fontSize: 34,
-                      fontWeight: FontWeight.w800,
-                      color: AppTheme.textPrimary,
-                      letterSpacing: -0.8,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: AppTheme.space3),
-                _staggered(
-                  index: 2,
-                  child: const Text(
-                    'A quiet place to reflect, meditate,\nand return to yourself.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontFamily: 'Outfit',
-                      fontSize: 16,
-                      height: 1.6,
-                      color: AppTheme.textSecondary,
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: AppTheme.space8),
-
-                _staggered(
-                  index: 3,
-                  child: const Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+          child: LayoutBuilder(builder: (context, bounds) {
+            return SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                      maxWidth: 440,
+                      minHeight:
+                          (bounds.maxHeight - 48).clamp(0.0, double.infinity)),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      _Pillar(icon: Icons.edit_note_rounded, label: 'Journal'),
-                      _Pillar(icon: Icons.self_improvement_rounded, label: 'Meditate'),
-                      _Pillar(icon: Icons.auto_awesome_rounded, label: 'Affirm'),
+                      const Row(children: [
+                        Icon(Icons.blur_circular_rounded,
+                            color: AppTheme.primaryLight, size: 24),
+                        SizedBox(width: 10),
+                        Flexible(
+                            child: Text('InnenFlow',
+                                style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppTheme.textPrimary))),
+                      ]),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 32),
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Center(
+                                  child: ExcludeSemantics(
+                                      child: SizedBox(
+                                height: 160,
+                                width: 160,
+                                child: Stack(
+                                    alignment: Alignment.center,
+                                    children: [
+                                      const BreathingMandala(
+                                          size: 160, opacity: 0.24),
+                                      Container(
+                                          width: 84,
+                                          height: 84,
+                                          decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              gradient:
+                                                  AppTheme.primaryGradient,
+                                              boxShadow: AppTheme.glow(
+                                                  AppTheme.primary,
+                                                  strength: 0.25)),
+                                          child: const Center(
+                                              child: Motif(SacredMotif.lotus,
+                                                  size: 44,
+                                                  color: Colors.white))),
+                                    ]),
+                              ))),
+                              const SizedBox(height: 28),
+                              const Text('LESS NOISE. MORE YOU.',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      letterSpacing: 2,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFFE7CDA5))),
+                              const SizedBox(height: 14),
+                              const Text('Find a little\nroom to breathe.',
+                                  style: TextStyle(
+                                      fontSize: 38,
+                                      height: 1.1,
+                                      letterSpacing: -1.3,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppTheme.textPrimary)),
+                              const SizedBox(height: 16),
+                              const Text(
+                                  'A journal for your thoughts. A pause for your mind.\nA small practice that belongs to you.',
+                                  style: TextStyle(
+                                      fontSize: 16,
+                                      height: 1.6,
+                                      color: AppTheme.textSecondary)),
+                              const SizedBox(height: 24),
+                              const Wrap(spacing: 8, runSpacing: 8, children: [
+                                _Pillar(
+                                    icon: Icons.edit_note_rounded,
+                                    label: 'Reflect'),
+                                _Pillar(
+                                    icon: Icons.air_rounded, label: 'Breathe'),
+                                _Pillar(
+                                    icon: Icons.insights_rounded,
+                                    label: 'Grow'),
+                              ]),
+                            ]),
+                      ),
+                      Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            SacredButton(
+                                label: 'Create your account',
+                                icon: Icons.arrow_forward_rounded,
+                                onTap: () => context.push('/signup')),
+                            const SizedBox(height: 12),
+                            SacredButton(
+                                label: 'Sign in',
+                                secondary: true,
+                                onTap: () => context.push('/login')),
+                            const SizedBox(height: 16),
+                            const Text('Start small. Come as you are.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    fontSize: 13, color: AppTheme.textMuted)),
+                          ]),
                     ],
                   ),
                 ),
-
-                const Spacer(flex: 3),
-
-                _staggered(
-                  index: 4,
-                  child: SacredButton(
-                    label: 'Begin your journey',
-                    icon: Icons.arrow_forward_rounded,
-                    onTap: () => context.push('/signup'),
-                  ),
-                ),
-                const SizedBox(height: AppTheme.space3),
-                _staggered(
-                  index: 5,
-                  child: SacredButton(
-                    label: 'I already have an account',
-                    secondary: true,
-                    onTap: () => context.push('/login'),
-                  ),
-                ),
-                const SizedBox(height: AppTheme.space6),
-                // Was 'ॐ शान्तिः'. The last line on the screen somebody sees
-                // before deciding whether to sign up should not ask them to
-                // recognise a mantra from one tradition — that is the single
-                // most exclusionary place in the app to put one.
-                _staggered(
-                  index: 6,
-                  child: const Text(
-                    'be still · be here',
-                    style: TextStyle(
-                      fontFamily: 'Outfit',
-                      fontSize: 13,
-                      color: AppTheme.textMuted,
-                      letterSpacing: 2,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: AppTheme.space5),
-              ],
-            ),
-          ),
+              ),
+            );
+          }),
         ),
       ),
     );
@@ -179,37 +133,23 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 }
 
 class _Pillar extends StatelessWidget {
+  const _Pillar({required this.icon, required this.label});
   final IconData icon;
   final String label;
-  const _Pillar({required this.icon, required this.label});
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: AppTheme.space5),
-      child: Column(
-        children: [
-          Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-              border: Border.all(color: AppTheme.border),
-            ),
-            child: Icon(icon, size: 23, color: AppTheme.primaryLight),
-          ),
-          const SizedBox(height: AppTheme.space2),
-          Text(
-            label,
-            style: const TextStyle(
-              fontFamily: 'Outfit',
-              fontSize: 12,
-              color: AppTheme.textSecondary,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+            color: AppTheme.bgCard,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppTheme.border)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 18, color: AppTheme.primaryLight),
+          const SizedBox(width: 6),
+          Text(label,
+              style:
+                  const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+        ]),
+      );
 }

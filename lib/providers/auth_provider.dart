@@ -7,12 +7,16 @@ import '../models/user_profile.dart';
 import '../core/constants/app_constants.dart';
 
 class AuthProvider extends ChangeNotifier {
-  final AuthService _authService = AuthService();
-  final ProfileService _profileService = ProfileService();
+  final AuthService _authService;
+  final ProfileService _profileService;
+  StreamSubscription<User?>? _authSubscription;
+  int _session = 0;
+  bool _disposed = false;
 
   User? _user;
   UserProfile? _profile;
   bool _loading = true;
+  bool _initializing = true;
   String? _error;
   bool _isAdmin = false;
 
@@ -32,6 +36,7 @@ class AuthProvider extends ChangeNotifier {
   User? get user => _user;
   UserProfile? get profile => _profile;
   bool get loading => _loading;
+  bool get initializing => _initializing;
   String? get error => _error;
   bool get isAuthenticated => _user != null;
 
@@ -47,12 +52,12 @@ class AuthProvider extends ChangeNotifier {
   bool get isAdmin => _isAdmin || _isConfiguredAdminEmail;
 
   /// Transitional fallback so admin controls are reachable before the first
-  /// custom claim is minted — see [AppConstants.adminEmail]. Firestore rules
-  /// carry the identical fallback, so this never grants the UI more than the
-  /// server will actually honour.
+  /// custom claim is minted — see [AppConstants.adminEmail]. The API requires this email to be verified as well.
+  /// Match that requirement so unverified accounts do not see unusable controls.
   bool get _isConfiguredAdminEmail {
     final email = _user?.email?.toLowerCase().trim();
-    return email != null && email == AppConstants.adminEmail.toLowerCase();
+    return _user?.emailVerified == true &&
+        email != null && email == AppConstants.adminEmail.toLowerCase().trim();
   }
 
   /// Whether any auth state has arrived yet.
@@ -61,8 +66,11 @@ class AuthProvider extends ChangeNotifier {
   /// somebody signing in — telling those apart is the whole reason this exists.
   bool _sawInitialAuthState = false;
 
-  AuthProvider() {
-    _authService.authStateChanges.listen((user) async {
+  AuthProvider({AuthService? authService, ProfileService? profileService})
+      : _authService = authService ?? AuthService(),
+        _profileService = profileService ?? ProfileService() {
+    _authSubscription = _authService.authStateChanges.listen((user) async {
+      final session = ++_session;
       // The flag is raised HERE rather than in signIn/signUp, and that placement
       // is load-bearing. Firebase emits this event the instant the credential
       // resolves — before the awaits in signUp() finish — so the router
@@ -78,11 +86,16 @@ class AuthProvider extends ChangeNotifier {
       _sawInitialAuthState = true;
       if (user != null && wasSignedOut && !isFirstEvent) _justSignedIn = true;
 
+      if (_user?.uid != user?.uid) {
+        _profile = null;
+        _isAdmin = false;
+      }
       _user = user;
       if (user != null) {
         // The claim first, because `isAdmin` decides which routes exist and the
         // router is about to run.
         await _refreshAdminClaim(user);
+        if (_disposed || session != _session) return;
 
         // Routing is unblocked *here*, on identity, and not after the profile
         // has been fetched.
@@ -104,13 +117,16 @@ class AuthProvider extends ChangeNotifier {
         // falls back, the avatar draws its default), and none of them can be
         // reached without a session anyway.
         _loading = false;
+        _initializing = false;
         notifyListeners();
 
         unawaited(_loadProfile(user.uid));
       } else {
+        _justSignedIn = false;
         _profile = null;
         _isAdmin = false;
         _loading = false;
+        _initializing = false;
         notifyListeners();
       }
     });
@@ -118,10 +134,14 @@ class AuthProvider extends ChangeNotifier {
 
   /// Reads the `admin` claim out of the signed Firebase ID token.
   Future<void> _refreshAdminClaim(User user, {bool forceRefresh = false}) async {
+    final session = _session;
     try {
-      final token = await user.getIdTokenResult(forceRefresh);
+      final token = await user.getIdTokenResult(forceRefresh)
+          .timeout(const Duration(seconds: 8));
+      if (_disposed || session != _session) return;
       _isAdmin = token.claims?['admin'] == true;
     } catch (e) {
+      if (_disposed || session != _session) return;
       // Fail closed: if the claim cannot be read, assume no privilege.
       _isAdmin = false;
     }
@@ -163,14 +183,18 @@ class AuthProvider extends ChangeNotifier {
   /// changes when this device changes it, which is the case a listener was
   /// never needed for.
   Future<void> _loadProfile(String uid) async {
+    final session = _session;
     try {
-      _profile = await _profileService.getProfile(uid);
+      final profile = await _profileService.getProfile(uid);
+      if (_disposed || session != _session || _user?.uid != uid) return;
+      _profile = profile;
     } catch (e) {
       // Keep whatever was already loaded. A profile that fails to refresh is a
       // stale name; a profile blanked on a dropped request is a screen that
       // says the member has no account.
       debugPrint('⚠️ auth: profile unavailable: $e');
     }
+    if (_disposed || session != _session) return;
     _loading = false;
     notifyListeners();
   }
@@ -363,6 +387,14 @@ class AuthProvider extends ChangeNotifier {
   void clearError() {
     _error = null;
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _session++;
+    _authSubscription?.cancel();
+    super.dispose();
   }
 
   String _mapAuthError(String code) {

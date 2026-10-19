@@ -11,6 +11,7 @@ import '../../services/counselling_service.dart';
 import '../../services/notification_center.dart';
 import '../../widgets/counselling_chat.dart';
 import '../../widgets/sacred.dart';
+import 'counselling_actions.dart';
 import 'counselling_screen.dart' show openUpiApp, copyUpiId, openMeet;
 
 /// The counselling room, from the member's side.
@@ -22,6 +23,7 @@ import 'counselling_screen.dart' show openUpiApp, copyUpiId, openMeet;
 /// document rather than a step counter in memory.
 class CounsellingChatView extends StatefulWidget {
   final String sessionId;
+  final CounsellingService? service;
 
   /// True when an admin is looking. Changes which side of the room the bubbles
   /// sit on, and which controls are offered.
@@ -31,26 +33,41 @@ class CounsellingChatView extends StatefulWidget {
     super.key,
     required this.sessionId,
     this.asAdmin = false,
+    this.service,
   });
 
   @override
   State<CounsellingChatView> createState() => _CounsellingChatViewState();
 }
 
-class _CounsellingChatViewState extends State<CounsellingChatView> {
-  final _service = CounsellingService();
+class _CounsellingChatViewState extends State<CounsellingChatView>
+    with WidgetsBindingObserver {
+  late final _service = widget.service ?? CounsellingService();
   final _scroll = ScrollController();
   Timer? _countdown;
+  late final _sessionStream = _service.streamSession(widget.sessionId);
+  late final _messageStream = _service.streamMessages(widget.sessionId);
+  bool _foreground = true;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
+    if (_foreground) _service.refresh(sessionId: widget.sessionId);
+  }
 
   ChatSender get _me => widget.asAdmin ? ChatSender.admin : ChatSender.member;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Only running while a session is winding down; the countdown on an active
     // session would be a rebuild a second for no reason.
-    _countdown = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted) setState(() {});
+    _countdown = Timer.periodic(const Duration(seconds: 8), (_) {
+      if (mounted && _foreground) {
+        _service.refresh(sessionId: widget.sessionId);
+        setState(() {});
+      }
     });
     // Reading the thread is what clears its badge — otherwise the dashboard
     // keeps claiming an unread reply the member is currently looking at.
@@ -63,7 +80,9 @@ class _CounsellingChatViewState extends State<CounsellingChatView> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _countdown?.cancel();
+    if (widget.service == null) _service.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -82,8 +101,25 @@ class _CounsellingChatViewState extends State<CounsellingChatView> {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<CounsellingSession?>(
-      stream: _service.streamSession(widget.sessionId),
+      stream: _sessionStream,
       builder: (context, snap) {
+        if (snap.hasError) {
+          return Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('Could not refresh your chat.'),
+            TextButton(
+                onPressed: () => _service.refresh(sessionId: widget.sessionId),
+                child: const Text('Retry')),
+            TextButton(
+                onPressed: () => Navigator.of(context).maybePop(),
+                child: const Text('Back')),
+          ]));
+        }
+        if (snap.connectionState != ConnectionState.waiting &&
+            snap.data == null) {
+          return const Center(
+              child: Text('This conversation is no longer available.'));
+        }
         final session = snap.data;
         if (session == null) {
           return const Center(
@@ -95,8 +131,19 @@ class _CounsellingChatViewState extends State<CounsellingChatView> {
             _header(session),
             Expanded(
               child: StreamBuilder<List<ChatMessage>>(
-                stream: _service.streamMessages(session.id),
+                stream: _messageStream,
                 builder: (context, msgSnap) {
+                  if (msgSnap.hasError) {
+                    return Center(
+                        child:
+                            Column(mainAxisSize: MainAxisSize.min, children: [
+                      const Text('Could not load messages.'),
+                      TextButton(
+                          onPressed: () =>
+                              _service.refresh(sessionId: widget.sessionId),
+                          child: const Text('Retry')),
+                    ]));
+                  }
                   final messages = msgSnap.data ?? const <ChatMessage>[];
                   _scrollToEnd();
                   return ListView(
@@ -113,9 +160,11 @@ class _CounsellingChatViewState extends State<CounsellingChatView> {
               ),
             ),
             ChatComposer(
-              enabled: session.status != CounsellingStatus.ended,
+              enabled: session.status == CounsellingStatus.active,
               disabledHint: session.timeUntilPurge == null
-                  ? 'This session has ended.'
+                  ? (session.status == CounsellingStatus.rejected
+                      ? 'This request was declined.'
+                      : 'Chat opens after admin approval.')
                   : 'Session ended. This conversation disappears in '
                       '${_formatLeft(session.timeUntilPurge!)}.',
               // No `sender`: the server derives the role from the verified
@@ -140,7 +189,9 @@ class _CounsellingChatViewState extends State<CounsellingChatView> {
     return Column(
       children: [
         SacredAppBar(
-          title: widget.asAdmin ? session.name : 'Your counsellor',
+          title: widget.asAdmin
+              ? (session.name.isEmpty ? 'Member' : session.name)
+              : 'Your support chat',
           subtitle: session.status.label,
           // Navigator rather than context.pop(): the admin reaches this view
           // through an imperative push from the inbox, which go_router does not
@@ -174,23 +225,23 @@ class _CounsellingChatViewState extends State<CounsellingChatView> {
                   style: TextStyle(
                     fontFamily: 'Outfit',
                     fontSize: 11,
-                    color:
-                        left != null ? Colors.redAccent : AppTheme.textMuted,
+                    color: left != null ? Colors.redAccent : AppTheme.textMuted,
                   ),
                 ),
               ),
-              if (session.status == CounsellingStatus.active ||
-                  session.status == CounsellingStatus.approved)
-                GestureDetector(
-                  onTap: () => _confirmEnd(session),
-                  child: const Text(
-                    'End session',
-                    style: TextStyle(
-                        fontFamily: 'Outfit',
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: AppTheme.textSecondary),
-                  ),
+              if (widget.asAdmin)
+                PopupMenuButton<CounsellingAction>(
+                  tooltip: 'Conversation actions',
+                  onSelected: (action) => _changeConversation(session, action),
+                  itemBuilder: (_) => [
+                    if (session.isLive)
+                      const PopupMenuItem(
+                          value: CounsellingAction.end,
+                          child: Text('End session')),
+                    const PopupMenuItem(
+                        value: CounsellingAction.delete,
+                        child: Text('Delete conversation')),
+                  ],
                 ),
             ],
           ),
@@ -205,31 +256,15 @@ class _CounsellingChatViewState extends State<CounsellingChatView> {
     return '${d.inHours}h ${d.inMinutes % 60}m';
   }
 
-  Future<void> _confirmEnd(CounsellingSession session) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.bgCard,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('End this session?',
-            style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textPrimary)),
-        content: const Text(
-          'The conversation stays readable for two more hours and is then '
-          'deleted for good — messages and voice notes both.',
-          style: TextStyle(
-              fontFamily: 'Outfit', color: AppTheme.textSecondary, height: 1.5),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Keep talking')),
-          ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('End session')),
-        ],
-      ),
-    );
-    if (ok == true) await _service.endSession(session.id);
+  Future<void> _changeConversation(
+      CounsellingSession session, CounsellingAction action) async {
+    if (!widget.asAdmin) return;
+    final changed = await confirmCounsellingAction(
+        context: context, service: _service, session: session, action: action);
+    if (!changed || !mounted) return;
+    if (action == CounsellingAction.delete) {
+      Navigator.of(context).maybePop();
+    }
   }
 
   // ─────────────────────────── action cards ───────────────────────────
@@ -241,10 +276,41 @@ class _CounsellingChatViewState extends State<CounsellingChatView> {
   List<Widget> _actionCards(CounsellingSession session) {
     if (widget.asAdmin) return const [];
 
+    if (!Counselling.paymentsEnabled &&
+        [
+          CounsellingStatus.awaitingPayment,
+          CounsellingStatus.paymentSubmitted,
+          CounsellingStatus.rejected
+        ].contains(session.status)) {
+      return [
+        Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(children: [
+              const Icon(Icons.schedule_rounded,
+                  color: AppTheme.primaryLight, size: 36),
+              const SizedBox(height: 12),
+              Text(
+                  session.status == CounsellingStatus.rejected
+                      ? 'Request declined'
+                      : 'You are on the waiting list',
+                  style: const TextStyle(
+                      fontSize: 22, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Text(
+                  session.status == CounsellingStatus.rejected
+                      ? 'This request was not accepted. You can return and submit a new request when you are ready.'
+                      : 'No payment needed. We will notify you when your chat opens.',
+                  textAlign: TextAlign.center),
+              TextButton(
+                  onPressed: () => _service.refresh(sessionId: session.id),
+                  child: const Text('Check status')),
+            ]))
+      ];
+    }
     return switch (session.status) {
-      CounsellingStatus.awaitingPayment ||
-      CounsellingStatus.rejected =>
-        [_PaymentCard(session: session, service: _service)],
+      CounsellingStatus.awaitingPayment || CounsellingStatus.rejected => [
+          _PaymentCard(session: session, service: _service)
+        ],
       CounsellingStatus.approved => [
           _ModeChoiceCard(session: session, service: _service),
         ],
@@ -360,7 +426,6 @@ class _PaymentCardState extends State<_PaymentCard> {
               ],
             ),
             const SizedBox(height: AppTheme.space4),
-
             if (!_reporting) ...[
               // White plate behind the QR on purpose: scanners fail on an
               // inverted code, and this app is dark everywhere else.
@@ -582,7 +647,8 @@ class _ModeChoiceCard extends StatelessWidget {
               context,
               icon: Icons.videocam_outlined,
               title: '${Counselling.sessionMinutes} minute video call',
-              blurb: 'Face to face on Google Meet. Best if you want to be heard.',
+              blurb:
+                  'Face to face on Google Meet. Best if you want to be heard.',
               mode: CounsellingMode.meet,
             ),
             const SizedBox(height: AppTheme.space3),
@@ -786,7 +852,9 @@ class _MeetCard extends StatelessWidget {
               'The link stays here for the whole session.',
               textAlign: TextAlign.center,
               style: TextStyle(
-                  fontFamily: 'Outfit', fontSize: 11, color: AppTheme.textMuted),
+                  fontFamily: 'Outfit',
+                  fontSize: 11,
+                  color: AppTheme.textMuted),
             ),
           ],
         ),

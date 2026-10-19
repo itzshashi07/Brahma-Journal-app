@@ -7,20 +7,8 @@ import '../../providers/auth_provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../widgets/sacred.dart';
 
-/// Branded launch sequence.
-///
-/// The old splash held a fixed three-second delay before routing — dead time
-/// whether or not the app was ready. This runs a choreographed animation and
-/// navigates the moment *both* the animation has settled and auth has resolved,
-/// so a warm start feels fast and a cold start still finishes gracefully rather
-/// than snapping away mid-bloom.
-///
-/// The sequence reads as an idea rather than a logo drop:
-///   0.00–0.45  mandala draws itself outward and begins to turn
-///   0.20–0.60  lotus blooms at the centre, scaling with a soft overshoot
-///   0.45–0.75  wordmark rises and fades in
-///   0.60–0.85  tagline follows
-///   0.80–1.00  breathing pulse settles into a steady rhythm
+/// Brief first-run introduction. Returning users route as soon as the restored
+/// session is known, without waiting for the branding animation.
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -49,7 +37,7 @@ class _SplashScreenState extends State<SplashScreen>
 
     _intro = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2200),
+      duration: const Duration(milliseconds: 650),
     );
 
     // Continuous, independent of the intro so it never restarts mid-breath.
@@ -79,17 +67,15 @@ class _SplashScreenState extends State<SplashScreen>
     _boot();
   }
 
-  /// Waits for the animation and for auth to resolve, then routes.
+  /// Waits for session restoration and, on first run only, the introduction.
   Future<void> _boot() async {
     final prefs = await SharedPreferences.getInstance();
     final seenOnboarding = prefs.getBool('onboarding_completed') ?? false;
 
-    // Let the sequence land — but never hold the user longer than this even if
-    // Firebase is slow to answer.
-    await Future.wait([
-      _intro.forward().orCancel.catchError((_) {}),
-      Future<void>.delayed(const Duration(milliseconds: 2200)),
-    ]);
+    // Returning users should not wait through a fixed branding delay.
+    if (!seenOnboarding && mounted && !MediaQuery.disableAnimationsOf(context)) {
+      await _intro.forward().orCancel.catchError((_) {});
+    }
 
     if (!mounted || _navigated) return;
 
@@ -97,8 +83,7 @@ class _SplashScreenState extends State<SplashScreen>
     // the restored session. Routing before that lands a returning user on the
     // welcome screen for a frame.
     final auth = context.read<AuthProvider>();
-    final deadline = DateTime.now().add(const Duration(seconds: 3));
-    while (auth.loading && DateTime.now().isBefore(deadline)) {
+    while (auth.initializing) {
       await Future<void>.delayed(const Duration(milliseconds: 80));
       if (!mounted) return;
     }

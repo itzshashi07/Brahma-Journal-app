@@ -76,15 +76,21 @@ class FirebaseMessagingService {
     if (_initialized) return;
     _initialized = true;
 
-    // iOS will not issue an APNs token — and therefore no FCM token — until
-    // the user has granted permission. On Android 13+ this is the same
-    // POST_NOTIFICATIONS prompt flutter_local_notifications already asks for;
-    // asking twice is harmless because the OS only shows it once.
-    final settings = await _messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
+    // Remember that we asked, including a refusal. Do not interrupt every
+    // launch or ask twice through the local-notifications and FCM plugins.
+    final prefs = await SharedPreferences.getInstance();
+    const permissionKey = 'notification_permission_prompted';
+    var settings = await _messaging.getNotificationSettings();
+    if (prefs.getBool(permissionKey) != true) {
+      await prefs.setBool(permissionKey, true);
+      if (settings.authorizationStatus == AuthorizationStatus.notDetermined ||
+          (defaultTargetPlatform == TargetPlatform.android &&
+              settings.authorizationStatus == AuthorizationStatus.denied)) {
+        settings = await _messaging.requestPermission(
+          alert: true, badge: true, sound: true,
+        );
+      }
+    }
     debugPrint('▶ fcm: permission ${settings.authorizationStatus.name}');
 
     // Suppress the system's own banner for foreground messages on iOS. Ours is

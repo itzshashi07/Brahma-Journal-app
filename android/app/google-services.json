@@ -22,6 +22,14 @@
           }
         },
         {
+          "client_id": "440787316408-gbj9jh8e39t0m3b5ud211h2kd32m9h27.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.brahma.brahmaApp",
+            "certificate_hash": "cc42588f89cf477be45238914426758f207e9b6a"
+          }
+        },
+        {
           "client_id": "440787316408-ovejqhc27bdgqjmf2pq1aeg8ior7lell.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {

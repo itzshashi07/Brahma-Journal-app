@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:brahma_app/core/constants/counselling.dart';
 import 'package:brahma_app/core/utils/notification_routes.dart';
 
 /// The table a notification tap goes through before anything is pushed.
@@ -29,15 +30,24 @@ void main() {
     test('an operator alert goes to the operator screen, not the member one',
         () {
       expect(appRouteFor('/support', isAdminAlert: true), '/support-inbox');
-      expect(appRouteFor('/counselling', isAdminAlert: true),
-          '/counselling/inbox');
+      if (Counselling.enabled) {
+        expect(appRouteFor('/counselling', isAdminAlert: true),
+            '/counselling/inbox');
+      }
       expect(appRouteFor('/admin/reports', isAdminAlert: true), '/reports');
     });
 
     test('the same paths on a member notification stay the member\'s', () {
       expect(appRouteFor('/support'), '/support');
-      expect(appRouteFor('/counselling'), '/counselling');
+      if (Counselling.enabled) {
+        expect(appRouteFor('/counselling'), '/counselling');
+      }
     });
+
+    test('counselling switched off: a session alert opens nothing', () {
+      expect(appRouteFor('/counselling'), isNull);
+      expect(appRouteFor('/counselling/inbox', isAdminAlert: true), isNull);
+    }, skip: Counselling.enabled);
 
     test('a known section with anything under it is allowed through', () {
       expect(appRouteFor('/games/leaderboard'), '/games/leaderboard');

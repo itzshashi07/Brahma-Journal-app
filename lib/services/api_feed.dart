@@ -49,12 +49,13 @@ class ApiFeed<T> {
   /// [load] fetches the current value. [refreshOnPush] is for feeds no push
   /// relates to — the remote config, for instance, which changes when an
   /// operator publishes a release and never announces itself.
-  ApiFeed(this._load, {bool refreshOnPush = true, this.debugLabel = 'feed'})
+  ApiFeed(this._load, {bool refreshOnPush = true, this.debugLabel = 'feed', this.reportErrors = false})
       : _refreshOnPush = refreshOnPush;
 
   final Future<T> Function() _load;
   final bool _refreshOnPush;
   final String debugLabel;
+  final bool reportErrors;
 
   final _controller = StreamController<T>.broadcast();
   StreamSubscription? _pushSub;
@@ -110,6 +111,7 @@ class ApiFeed<T> {
       if (!_controller.isClosed) _controller.add(data);
     }).catchError((Object e) {
       debugPrint('⚠️ $debugLabel: could not refresh: $e');
+      if (reportErrors && !_controller.isClosed) _controller.addError(e);
     }).whenComplete(() {
       _inFlight = null;
     });

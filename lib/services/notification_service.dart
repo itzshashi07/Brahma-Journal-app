@@ -13,7 +13,8 @@ class NotificationService {
   NotificationService._internal();
 
   final ApiService _api = ApiService();
-  final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _localNotifications =
+      FlutterLocalNotificationsPlugin();
 
   bool _isInitialized = false;
 
@@ -53,12 +54,13 @@ class NotificationService {
     // iOS Settings
     const DarwinInitializationSettings initializationSettingsDarwin =
         DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
     );
 
-    const InitializationSettings initializationSettings = InitializationSettings(
+    const InitializationSettings initializationSettings =
+        InitializationSettings(
       android: initializationSettingsAndroid,
       iOS: initializationSettingsDarwin,
     );
@@ -71,8 +73,7 @@ class NotificationService {
 
     _isInitialized = true;
 
-    // Request permissions for Android 13+
-    await requestPermissions();
+    // FirebaseMessagingService owns the single permission prompt.
   }
 
   /// The notification that started the app, if that is how it started.
@@ -99,8 +100,9 @@ class NotificationService {
   // Request permissions
   Future<void> requestPermissions() async {
     try {
-      final androidImplementation = _localNotifications
-          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+      final androidImplementation =
+          _localNotifications.resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
       if (androidImplementation != null) {
         await androidImplementation.requestNotificationsPermission();
       }
@@ -186,7 +188,8 @@ class NotificationService {
     );
 
     try {
-      await _localNotifications.show(id, title, body, details, payload: payload);
+      await _localNotifications.show(id, title, body, details,
+          payload: payload);
     } catch (e) {
       debugPrint('⚠️ Could not show notification: $e');
     }
@@ -237,29 +240,26 @@ class NotificationService {
   /// new account does not open the app to years of announcements about
   /// articles it has never seen.
   Future<List<AppNotification>> fetchNotifications() async {
-    try {
-      final body = await _api.get('/api/notifications', query: {'limit': '100'});
-      final list = (body?['notifications'] as List? ?? const []);
-      return list
-          .map((n) => AppNotification.fromJson(Map<String, dynamic>.from(n as Map)))
-          .toList();
-    } catch (e) {
-      debugPrint('⚠️ Notifications unavailable: $e');
-      return const [];
-    }
+    final body = await _api.get('/api/notifications', query: {'limit': '100'});
+    return ((body?['notifications'] as List?) ?? const [])
+        .map((n) =>
+            AppNotification.fromJson(Map<String, dynamic>.from(n as Map)))
+        .toList();
   }
 
   Future<List<Announcement>> fetchAnnouncements() async {
-    try {
-      final body = await _api.get('/api/notifications/announcements');
-      final list = (body?['announcements'] as List? ?? const []);
-      return list
-          .map((a) => Announcement.fromJson(Map<String, dynamic>.from(a as Map)))
-          .toList();
-    } catch (e) {
-      debugPrint('⚠️ Announcements unavailable: $e');
-      return const [];
-    }
+    final body = await _api.get('/api/notifications/announcements');
+    return ((body?['announcements'] as List?) ?? const [])
+        .map((a) => Announcement.fromJson(Map<String, dynamic>.from(a as Map)))
+        .toList();
+  }
+
+  Future<List<Map<String, dynamic>>> fetchAdminAlerts() async {
+    final body =
+        await _api.get('/api/notifications/admin', query: {'limit': '50'});
+    return ((body?['notifications'] as List?) ?? const [])
+        .map((n) => Map<String, dynamic>.from(n as Map))
+        .toList();
   }
 
   /// Single-shot streams, so existing StreamBuilder call sites compile

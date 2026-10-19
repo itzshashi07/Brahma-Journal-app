@@ -433,6 +433,50 @@ Firebase setup — Google sign-in needs SHA-1 and SHA-256 fingerprints in the
 console; phone/OTP needs the same for Play Integrity. FCM setup including the
 APNs key is in `docs/FCM-SETUP.md` in the [backend repo](https://github.com/itzshashi07/innenflow-backend).
 
+#### Signing fingerprints: every key Play can sign with, not just one
+
+Google sign-in matches an install by package name **and** signing certificate.
+An install from Play is signed by *Play's* key, not ours, so the Play key's
+fingerprint has to be in Firebase or "Continue with Google" fails for every
+store user while working perfectly from `flutter run`.
+
+The Play app signing key was **upgraded** (Play Console → Test and release →
+App integrity → App signing). After an upgrade Play signs with *both*: the new
+key for Android 13+, the old one for older phones. So both stay registered.
+Registered on project `brahma-journal-nhdat` (owner account
+techrhym404@gmail.com — the other Google accounts get 403):
+
+| SHA-1 | Key |
+|---|---|
+| `cc42588f…9b6a` | Play app signing — **current**, after the upgrade |
+| `ba644577…7d4c` | Play app signing — previous, still used for Android ≤ 12 |
+| `ddecd142…0062` | upload key (`android/key.properties`) |
+| `1678d12f…372e` | this laptop's debug keystore |
+
+1.7.4 went live with only the old Play key registered, and Google sign-in
+failed on the store build (Oct 2026). If the signing key is ever upgraded
+again, add the new fingerprints the same day:
+
+```bash
+firebase apps:android:sha:create <APP_ID> <SHA1> --project brahma-journal-nhdat --account techrhym404@gmail.com
+firebase apps:sdkconfig ANDROID <APP_ID> --project brahma-journal-nhdat --account techrhym404@gmail.com -o android/app/google-services.json
+```
+
+The matching happens on Google's side, so already-installed builds start
+working within minutes; the refreshed `google-services.json` just keeps the repo
+honest about which OAuth clients exist.
+
+#### Counselling is switched off in the Play build
+
+`Counselling.enabled = false` (`lib/core/constants/counselling.dart`). One-to-one
+counselling is "Mental and behavioural health" — a *Medical* category on Play —
+and Medical apps can only be published from an organization developer account;
+ours is personal. Declaring it got 1.7.3 rejected; not declaring it while it
+shipped would be an inaccurate declaration. So the code stays, every way in is
+closed (routes, notifications, the support button, the legal sections), and the
+Play Health declaration ticks only Sleep management and Stress management.
+Re-enable only together with an organization account and an updated declaration.
+
 ### What this repo deploys to Firebase, and what it does not
 
 ```bash

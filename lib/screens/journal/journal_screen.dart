@@ -9,6 +9,7 @@ import '../../core/utils/date_utils.dart';
 import '../../core/constants/professions.dart';
 import '../../widgets/craft_setup_sheet.dart';
 import '../../widgets/sacred.dart';
+import '../../widgets/retry_notice.dart';
 import '../../widgets/voice_input_button.dart';
 import '../../widgets/journal_chips.dart';
 import '../../core/constants/journal_options.dart';
@@ -134,7 +135,7 @@ class _JournalScreenState extends State<JournalScreen> {
     setState(() => _isLoading = true);
     final auth = context.read<AuthProvider>();
     final journal = context.read<JournalProvider>();
-    if (auth.user != null && journal.entries.isEmpty) {
+    if (auth.user != null && (!journal.hasLoaded || journal.error != null)) {
       await journal.loadEntries(auth.user!.uid);
     }
     if (!mounted) return;
@@ -264,6 +265,11 @@ class _JournalScreenState extends State<JournalScreen> {
                   child: Center(
                       child: CircularProgressIndicator(color: AppTheme.primary)),
                 )
+              else if (!journal.hasLoaded && journal.error != null && widget.entry == null)
+                Expanded(child: Center(child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: RetryNotice(message: journal.error!, onRetry: _loadToday),
+                )))
               else
                 Expanded(
                   child: ListView(
@@ -273,7 +279,7 @@ class _JournalScreenState extends State<JournalScreen> {
                         _isReadOnly ? _readingView() : _writingView(),
                   ),
                 ),
-              if (!_isReadOnly && !_isLoading) _saveBar(),
+              if (!_isReadOnly && !_isLoading && (journal.hasLoaded || widget.entry != null)) _saveBar(),
             ],
           ),
         ),

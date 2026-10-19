@@ -58,7 +58,7 @@ class LegalScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: AppTheme.space6),
-                    for (final section in doc.sections) ...[
+                    for (final section in doc.shownSections) ...[
                       Text(
                         section.$1,
                         style: const TextStyle(
@@ -135,6 +135,15 @@ class LegalDoc {
     required this.summary,
     required this.sections,
   });
+
+  /// Sections that only describe the counselling room. Hidden while
+  /// [Counselling.enabled] is off, so the policy does not sell a paid
+  /// service the app no longer offers.
+  static const _counsellingOnly = {'Counselling sessions', 'Payments'};
+
+  List<(String, String)> get shownSections => Counselling.enabled
+      ? sections
+      : [for (final s in sections) if (!_counsellingOnly.contains(s.$1)) s];
 
   static const updatedOn = '9 August 2026';
 

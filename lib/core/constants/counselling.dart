@@ -5,6 +5,22 @@
 /// down across six widget files is how a fee ends up correct on one screen and
 /// stale on another.
 class Counselling {
+  /// Whether the counselling room exists in this build at all.
+  ///
+  /// Off because one-to-one counselling is a "Mental and behavioural health"
+  /// feature, which Google Play files under Medical, and Medical apps can only
+  /// be published from an organization developer account. InnenFlow ships from
+  /// a personal one, so 1.7.3 was rejected (8 Oct 2026). With this off there is
+  /// no way in: the support button opens the contact form, the routes redirect
+  /// to the dashboard, and notifications for a session open nothing.
+  ///
+  /// Turn it back on only after the app moves to an organization account AND
+  /// the Play Console Health apps declaration ticks Mental and behavioural
+  /// health again — shipping one without the other is a rejection either way.
+  static const bool enabled = false;
+
+  static const bool paymentsEnabled = false;
+
   /// Where the session fee is collected.
   static const String upiId = 'brahmajournal@ptaxis';
   static const String payeeName = 'InnenFlow';
@@ -51,20 +67,38 @@ class Counselling {
     'Bank transfer',
   ];
 
-  /// What the intake form asks. Deliberately short: someone reaching for
-  /// counselling at 1am will abandon a ten-field form, and none of the fields
-  /// past these change what the counsellor does first.
+  /// Plain-language topics help someone describe their experience without
+  /// choosing a diagnosis. The free-text note covers anything not listed.
+  /// Coverage informed by NIMH Psychotherapies and NHS Talking therapies:
+  /// https://www.nimh.nih.gov/health/topics/psychotherapies
+  /// https://www.nhs.uk/tests-and-treatments/talking-therapies/
+  static const maxConcerns = 3;
+  static const otherConcern = 'Other / not sure how to describe it';
   static const concerns = <String>[
-    'Anxiety or constant worry',
-    'Sadness or low mood',
-    'Relationship trouble',
-    'Family conflict',
-    'Work or study stress',
-    'Loneliness',
-    'Sleep problems',
-    'Anger',
-    'Grief or loss',
-    'Something else',
+    'Stress or feeling overwhelmed',
+    'Anxiety, worry or panic',
+    'Low mood or loss of motivation',
+    'School, exams or study pressure',
+    'Work, career or burnout',
+    'Relationships or a breakup',
+    'Family, parenting or caregiving',
+    'Loneliness or friendship difficulties',
+    'Bullying, peer or social pressure',
+    'Confidence, self-worth or body image',
+    'Grief or losing someone',
+    'Sleep or difficulty relaxing',
+    'Anger or managing emotions',
+    'Painful memories or trauma',
+    'Unwanted thoughts or repetitive habits',
+    'Attention, focus or daily routines',
+    'Food or eating concerns',
+    'Alcohol, substances or other habits',
+    'Screen time, gaming or social media',
+    'Health worries or long-term illness',
+    'Identity, belonging or discrimination',
+    'Life changes or money worries',
+    'Unusual or distressing experiences',
+    otherConcern,
   ];
 
   static const languages = <String>['Hindi', 'English', 'Hinglish'];
@@ -74,7 +108,8 @@ class Counselling {
   /// Written as one message rather than four so the chat does not open with a
   /// wall of grey bubbles, and it says what happens next in order — the single
   /// most common support question is "what now?".
-  static String welcome(String name) => 'Hello ${name.isEmpty ? 'friend' : name} 👋\n\n'
+  static String welcome(String name) =>
+      'Hello ${name.isEmpty ? 'friend' : name} 👋\n\n'
       'Thank you for reaching out — that is the hardest part, and you have done it.\n\n'
       'Here is how this works:\n'
       '1. Pay the ₹$fee session fee below.\n'
@@ -135,9 +170,37 @@ class Counselling {
   /// picker: this is a counselling room, and the twelve hundred emoji a system
   /// picker offers are mostly noise here.
   static const emojis = <String>[
-    '🙏', '❤️', '🥺', '😊', '😔', '😢', '😭', '😅',
-    '😰', '😞', '😌', '🤗', '💪', '🌼', '✨', '🕊️',
-    '🌱', '☀️', '🌙', '💛', '🫂', '👍', '👌', '🙌',
-    '😇', '😴', '😤', '😳', '🤔', '💭', '🔥', '🎉',
+    '🙏',
+    '❤️',
+    '🥺',
+    '😊',
+    '😔',
+    '😢',
+    '😭',
+    '😅',
+    '😰',
+    '😞',
+    '😌',
+    '🤗',
+    '💪',
+    '🌼',
+    '✨',
+    '🕊️',
+    '🌱',
+    '☀️',
+    '🌙',
+    '💛',
+    '🫂',
+    '👍',
+    '👌',
+    '🙌',
+    '😇',
+    '😴',
+    '😤',
+    '😳',
+    '🤔',
+    '💭',
+    '🔥',
+    '🎉',
   ];
 }

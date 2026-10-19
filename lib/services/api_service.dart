@@ -126,6 +126,19 @@ class ApiService {
         ));
   }
 
+  /// A bounded budget for server operations that intentionally do more work,
+  /// such as an administrator removing data across account collections.
+  Future<dynamic> postWithTimeout(String path, Object? body,
+      {required Duration timeout}) async {
+    final uri = Uri.parse('$baseUrl$path');
+    return _send(
+      () async => _client.post(uri,
+          headers: await _headers(),
+          body: body == null ? null : jsonEncode(body)),
+      timeout: timeout,
+    );
+  }
+
   /// Replaces a resource wholesale, as against [patch]'s partial update.
   ///
   /// Used where the app owns the entire collection and sends it back intact —
@@ -161,10 +174,11 @@ class ApiService {
   /// a 401 the user sees as "something went wrong". `getIdToken(true)` forces a
   /// refresh and the second attempt succeeds. Only one retry — if a forced
   /// refresh still yields a rejected token, the session is genuinely over.
-  Future<dynamic> _send(Future<http.Response> Function() request) async {
+  Future<dynamic> _send(Future<http.Response> Function() request,
+      {Duration? timeout}) async {
     http.Response response;
     try {
-      response = await request().timeout(_budget);
+      response = await request().timeout(timeout ?? _budget);
     } on TimeoutException {
       throw ApiException(
         0,
@@ -185,7 +199,7 @@ class ApiService {
       if (user != null) {
         try {
           await user.getIdToken(true);
-          response = await request().timeout(_timeout);
+          response = await request().timeout(timeout ?? _timeout);
         } catch (_) {
           // Fall through to the error handling below with the original 401.
         }

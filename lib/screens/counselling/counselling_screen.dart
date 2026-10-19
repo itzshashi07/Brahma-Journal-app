@@ -12,417 +12,390 @@ import '../../services/counselling_service.dart';
 import '../../widgets/sacred.dart';
 import 'counselling_chat_view.dart';
 
-/// The way in to counselling.
-///
-/// Decides for the member rather than asking them: if they have a session that
-/// is still alive, it opens; if they do not, it takes the intake form. Someone
-/// looking for help should not first have to work out which screen they need.
 class CounsellingScreen extends StatefulWidget {
-  const CounsellingScreen({super.key});
-
+  const CounsellingScreen({super.key, this.service});
+  final CounsellingService? service;
   @override
   State<CounsellingScreen> createState() => _CounsellingScreenState();
 }
 
 class _CounsellingScreenState extends State<CounsellingScreen> {
-  final _service = CounsellingService();
-
+  late final _service = widget.service ?? CounsellingService();
+  late final _sessions = _service.streamMine();
   @override
-  void initState() {
-    super.initState();
-    // Finished conversations past their two hours are destroyed on the way in,
-    // from both sides of the room, so the promise holds without depending on a
-    // deployed Cloud Function.
-    _service.purgeExpired();
+  void dispose() {
+    if (widget.service == null) _service.dispose();
+    super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: SacredBackdrop(
-        child: SafeArea(
+  Widget build(BuildContext context) => Scaffold(
+        body: SacredBackdrop(
+            child: SafeArea(
           child: StreamBuilder<List<CounsellingSession>>(
-            stream: _service.streamMine(),
+            stream: _sessions,
             builder: (context, snap) {
-              if (snap.connectionState == ConnectionState.waiting) {
-                return const Center(
-                    child: CircularProgressIndicator(color: AppTheme.primary));
+              if (snap.hasError) {
+                return Center(
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Text('Could not load your requests. Please try again.'),
+                  TextButton(
+                      onPressed: () => _service.refresh(),
+                      child: const Text('Retry')),
+                  TextButton(
+                      onPressed: () => context.pop(),
+                      child: const Text('Back')),
+                ]));
               }
-
-              final sessions = (snap.data ?? const <CounsellingSession>[])
-                  .where((s) => !s.isExpired)
-                  .toList();
-              final open = sessions
-                  .where((s) => s.status != CounsellingStatus.ended)
-                  .toList();
-
+              if (!snap.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              final open = snap.data!.where((s) =>
+                  !s.isExpired &&
+                  s.status != CounsellingStatus.ended &&
+                  s.status != CounsellingStatus.rejected);
               if (open.isNotEmpty) {
                 return CounsellingChatView(sessionId: open.first.id);
               }
-              return _IntakeForm(
+              return CounsellingIntakeForm(
                 service: _service,
-                previous: sessions.isEmpty ? null : sessions.first,
+                initialName:
+                    context.read<AuthProvider>().profile?.displayName ?? '',
               );
             },
           ),
-        ),
-      ),
-    );
-  }
+        )),
+      );
 }
 
-// ─────────────────────────── intake ───────────────────────────
-
-/// Six questions and a button.
-///
-/// Everything asked here changes what the counsellor does in the first two
-/// minutes. Anything that does not — address, occupation, marital status — is
-/// left out, because a long form in front of someone in distress is a form
-/// that does not get finished.
-class _IntakeForm extends StatefulWidget {
+/// A short support request, kept separate from its session feed so drafts stay
+/// intact when the network retries or a notification refreshes the screen.
+class CounsellingIntakeForm extends StatefulWidget {
   final CounsellingService service;
-  final CounsellingSession? previous;
-
-  const _IntakeForm({required this.service, this.previous});
-
+  final String initialName;
+  const CounsellingIntakeForm(
+      {super.key, required this.service, this.initialName = ''});
   @override
-  State<_IntakeForm> createState() => _IntakeFormState();
+  State<CounsellingIntakeForm> createState() => _CounsellingIntakeFormState();
 }
 
-class _IntakeFormState extends State<_IntakeForm> {
-  final _formKey = GlobalKey<FormState>();
-  final _nameCtrl = TextEditingController();
-  final _ageCtrl = TextEditingController();
-  final _phoneCtrl = TextEditingController();
-  final _detailsCtrl = TextEditingController();
-
-  String _gender = 'Prefer not to say';
-  String _concern = Counselling.concerns.first;
-  String _language = Counselling.languages.first;
-  bool _submitting = false;
+class _CounsellingIntakeFormState extends State<CounsellingIntakeForm> {
+  final _form = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _details = TextEditingController();
+  final _concernField = GlobalKey<FormFieldState<List<String>>>();
+  List<String> _concerns = [];
+  String _language = 'Hinglish';
+  bool _busy = false;
 
   @override
   void initState() {
     super.initState();
-    final profile = context.read<AuthProvider>().profile;
-    _nameCtrl.text = profile?.displayName ?? '';
+    _name.text = widget.initialName;
   }
 
   @override
   void dispose() {
-    _nameCtrl.dispose();
-    _ageCtrl.dispose();
-    _phoneCtrl.dispose();
-    _detailsCtrl.dispose();
+    _name.dispose();
+    _details.dispose();
     super.dispose();
   }
 
+  Future<void> _chooseConcerns() async {
+    FocusScope.of(context).unfocus();
+    final selected = await showModalBottomSheet<List<String>>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: AppTheme.bgCard,
+      builder: (_) => _ConcernPicker(selected: _concerns),
+    );
+    if (selected == null || !mounted) return;
+    setState(() => _concerns = selected);
+    _concernField.currentState?.didChange(selected);
+  }
+
   Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() => _submitting = true);
+    if (_busy || !_form.currentState!.validate()) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _busy = true);
     try {
       await widget.service.createSession(
-        name: _nameCtrl.text.trim(),
-        age: _ageCtrl.text.trim(),
-        gender: _gender,
-        phone: _phoneCtrl.text.trim(),
-        concern: _concern,
-        language: _language,
-        details: _detailsCtrl.text.trim(),
-      );
-      // The stream above swaps this form for the chat on its own.
-    } catch (e) {
+          name: _name.text.trim(),
+          age: '',
+          gender: '',
+          phone: '',
+          concern: _concerns.join('; '),
+          language: _language,
+          details: _details.text.trim());
+    } catch (_) {
       if (mounted) {
-        setState(() => _submitting = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Could not open the session: $e',
-                style: const TextStyle(fontFamily: 'Outfit')),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text(
+                'Could not send your request. Your writing is still here; please retry.')));
       }
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
+  Widget build(BuildContext context) => Column(children: [
         SacredAppBar(
-          title: 'Talk to someone',
-          subtitle: 'One-to-one, confidential',
-          onBack: () => context.pop(),
-        ),
+            title: 'Talk to someone',
+            subtitle: 'A little support, at your pace',
+            onBack: () => context.pop()),
         Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(AppTheme.space4, 0,
-                AppTheme.space4, AppTheme.space8),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(AppTheme.space4),
-                    decoration: BoxDecoration(
-                      color: AppTheme.primary.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                      border: Border.all(
-                          color: AppTheme.primary.withValues(alpha: 0.22)),
-                    ),
-                    child: const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'A ${Counselling.sessionMinutes}-minute session with a real person',
-                          style: TextStyle(
-                              fontFamily: 'Outfit',
-                              fontSize: 15,
-                              fontWeight: FontWeight.w700,
-                              color: AppTheme.textPrimary),
-                        ),
-                        SizedBox(height: 6),
-                        Text(
-                          'Tell us a little about what is going on. Nothing here is '
-                          'shared with anyone else, and the whole conversation is '
-                          'deleted two hours after your session ends.',
-                          style: TextStyle(
-                              fontFamily: 'Outfit',
-                              fontSize: 12.5,
-                              height: 1.55,
-                              color: AppTheme.textSecondary),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  if (widget.previous != null) ...[
-                    const SizedBox(height: AppTheme.space3),
-                    Container(
-                      padding: const EdgeInsets.all(AppTheme.space3),
-                      decoration: BoxDecoration(
-                        color: AppTheme.bgCard.withValues(alpha: 0.6),
-                        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-                        border: Border.all(color: AppTheme.border),
-                      ),
-                      child: const Row(
+            child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Form(
+                    key: _form,
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Icon(Icons.history_rounded,
-                              size: 15, color: AppTheme.textMuted),
-                          SizedBox(width: AppTheme.space2),
-                          Expanded(
-                            child: Text(
-                              'Your last session ended. Its messages are being '
-                              'deleted as promised.',
-                              style: TextStyle(
-                                  fontFamily: 'Outfit',
-                                  fontSize: 11.5,
-                                  color: AppTheme.textMuted),
-                            ),
+                          Container(
+                              padding: const EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                  color:
+                                      AppTheme.primary.withValues(alpha: .12),
+                                  borderRadius: BorderRadius.circular(24)),
+                              child: const Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Icon(Icons.forum_outlined,
+                                        color: AppTheme.primaryLight, size: 32),
+                                    SizedBox(height: 12),
+                                    Text('Start with what matters to you.',
+                                        style: TextStyle(
+                                            fontSize: 24,
+                                            fontWeight: FontWeight.w600,
+                                            height: 1.2)),
+                                    SizedBox(height: 10),
+                                    Text(
+                                        'Choose a topic, share a little, and request a private chat. No payment needed.',
+                                        style: TextStyle(
+                                            height: 1.5, fontSize: 15)),
+                                  ])),
+                          const SizedBox(height: 24),
+                          TextFormField(
+                              controller: _name,
+                              maxLength: 80,
+                              enabled: !_busy,
+                              textCapitalization: TextCapitalization.words,
+                              decoration: const InputDecoration(
+                                  labelText:
+                                      'What should we call you? (optional)')),
+                          const SizedBox(height: 12),
+                          FormField<List<String>>(
+                            key: _concernField,
+                            initialValue: _concerns,
+                            validator: (value) => value == null || value.isEmpty
+                                ? 'Choose a topic, or select Other / not sure.'
+                                : null,
+                            builder: (field) => Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  const Text('What is on your mind?',
+                                      style: TextStyle(
+                                          fontSize: 17,
+                                          fontWeight: FontWeight.w600)),
+                                  const SizedBox(height: 6),
+                                  const Text(
+                                      'Choose up to 3. You do not need a diagnosis.',
+                                      style: TextStyle(
+                                          color: AppTheme.textSecondary,
+                                          height: 1.4)),
+                                  const SizedBox(height: 12),
+                                  OutlinedButton.icon(
+                                    key: const ValueKey('choose-concerns'),
+                                    onPressed: _busy ? null : _chooseConcerns,
+                                    style: OutlinedButton.styleFrom(
+                                        alignment: Alignment.centerLeft,
+                                        padding: const EdgeInsets.all(16)),
+                                    icon: const Icon(Icons.tune_rounded),
+                                    label: Text(_concerns.isEmpty
+                                        ? 'Choose topics'
+                                        : 'Change topics (${_concerns.length})'),
+                                  ),
+                                  if (_concerns.isNotEmpty) ...[
+                                    const SizedBox(height: 8),
+                                    Wrap(
+                                        spacing: 8,
+                                        runSpacing: 8,
+                                        children: _concerns
+                                            .map((c) => Container(
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                      horizontal: 12,
+                                                      vertical: 8),
+                                                  decoration: BoxDecoration(
+                                                      color: AppTheme.primary
+                                                          .withValues(
+                                                              alpha: .15),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              14)),
+                                                  child: Text(c,
+                                                      style: const TextStyle(
+                                                          color: AppTheme
+                                                              .primaryLight,
+                                                          height: 1.3)),
+                                                ))
+                                            .toList()),
+                                  ],
+                                  if (field.hasError)
+                                    Padding(
+                                        padding: const EdgeInsets.only(top: 8),
+                                        child: Text(field.errorText!,
+                                            style: TextStyle(
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .error))),
+                                ]),
                           ),
-                        ],
-                      ),
-                    ),
-                  ],
+                          const SizedBox(height: 24),
+                          TextFormField(
+                              controller: _details,
+                              minLines: 3,
+                              maxLines: 6,
+                              maxLength: 2000,
+                              enabled: !_busy,
+                              textCapitalization: TextCapitalization.sentences,
+                              decoration: const InputDecoration(
+                                  labelText:
+                                      'What would you like support with?',
+                                  hintText:
+                                      'Jo comfortable lage, utna likho. What has been difficult lately?',
+                                  alignLabelWithHint: true),
+                              validator: (s) => (s ?? '').trim().length < 10
+                                  ? 'Write a little more so we can understand.'
+                                  : null),
+                          const SizedBox(height: 12),
+                          DropdownButtonFormField<String>(
+                              initialValue: _language,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                  labelText: 'Preferred language'),
+                              items: Counselling.languages
+                                  .map((s) => DropdownMenuItem(
+                                      value: s, child: Text(s)))
+                                  .toList(),
+                              onChanged: _busy
+                                  ? null
+                                  : (v) => setState(() => _language = v!)),
+                          const SizedBox(height: 24),
+                          SacredButton(
+                              label: 'Request a conversation',
+                              icon: Icons.send_rounded,
+                              loading: _busy,
+                              onTap: _busy ? null : _submit),
+                          const SizedBox(height: 16),
+                          const Text(
+                              'An admin reviews your request. We will notify you when your chat opens; timing depends on availability. This chat offers support, not a diagnosis or medication advice.',
+                              style: TextStyle(
+                                  color: AppTheme.textSecondary,
+                                  height: 1.5,
+                                  fontSize: 14)),
+                          const SizedBox(height: 12),
+                          const Text(
+                              'Not an emergency service. If you are in immediate danger, contact local emergency services. If you are under 18, involve a trusted adult when seeking support.',
+                              style: TextStyle(
+                                  color: AppTheme.textSecondary,
+                                  height: 1.5,
+                                  fontSize: 13)),
+                          const SizedBox(height: 32),
+                        ])))),
+      ]);
+}
 
-                  const SizedBox(height: AppTheme.space5),
-                  _label('Your name'),
-                  _field(
-                    controller: _nameCtrl,
-                    hint: 'What should we call you?',
-                    validator: (v) => (v == null || v.trim().isEmpty)
-                        ? 'Please tell us your name'
-                        : null,
-                  ),
-                  const SizedBox(height: AppTheme.space4),
+class _ConcernPicker extends StatefulWidget {
+  const _ConcernPicker({required this.selected});
+  final List<String> selected;
+  @override
+  State<_ConcernPicker> createState() => _ConcernPickerState();
+}
 
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _label('Age'),
-                            _field(
-                              controller: _ageCtrl,
-                              hint: 'e.g. 27',
-                              keyboard: TextInputType.number,
-                              validator: (v) {
-                                final n = int.tryParse((v ?? '').trim());
-                                if (n == null || n < 10 || n > 110) {
-                                  return 'Enter a real age';
-                                }
-                                return null;
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: AppTheme.space3),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _label('Gender'),
-                            _dropdown(
-                              value: _gender,
-                              items: const [
-                                'Female',
-                                'Male',
-                                'Other',
-                                'Prefer not to say'
-                              ],
-                              onChanged: (v) => setState(() => _gender = v!),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: AppTheme.space4),
-
-                  _label('Phone'),
-                  _field(
-                    controller: _phoneCtrl,
-                    hint: 'So we can reach you if the call drops',
-                    keyboard: TextInputType.phone,
-                    validator: (v) {
-                      final digits =
-                          (v ?? '').replaceAll(RegExp(r'\D'), '');
-                      if (digits.length < 10) return 'Enter a valid number';
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: AppTheme.space4),
-
-                  _label('What is this mostly about?'),
-                  _dropdown(
-                    value: _concern,
-                    items: Counselling.concerns,
-                    onChanged: (v) => setState(() => _concern = v!),
-                  ),
-                  const SizedBox(height: AppTheme.space4),
-
-                  _label('Which language are you most comfortable in?'),
-                  _dropdown(
-                    value: _language,
-                    items: Counselling.languages,
-                    onChanged: (v) => setState(() => _language = v!),
-                  ),
-                  const SizedBox(height: AppTheme.space4),
-
-                  _label('Anything you want us to know first? (optional)'),
-                  _field(
-                    controller: _detailsCtrl,
-                    hint: 'You can also say all of this in the chat.',
-                    lines: 4,
-                  ),
-                  const SizedBox(height: AppTheme.space6),
-
-                  SacredButton(
-                    label: 'Start — ₹${Counselling.fee}',
-                    icon: Icons.arrow_forward_rounded,
-                    loading: _submitting,
-                    onTap: _submitting ? null : _submit,
-                  ),
-                  const SizedBox(height: AppTheme.space3),
-                  const Text(
-                    'You pay after this, inside the chat. Nothing is charged now.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        fontFamily: 'Outfit',
-                        fontSize: 11.5,
-                        color: AppTheme.textMuted),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _label(String text) => Padding(
-        padding: const EdgeInsets.only(bottom: AppTheme.space2),
-        child: Text(
-          text,
-          style: const TextStyle(
-              fontFamily: 'Outfit',
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: AppTheme.textSecondary),
-        ),
-      );
-
-  Widget _field({
-    required TextEditingController controller,
-    required String hint,
-    String? Function(String?)? validator,
-    TextInputType? keyboard,
-    int lines = 1,
-  }) {
-    return TextFormField(
-      controller: controller,
-      validator: validator,
-      keyboardType: keyboard,
-      maxLines: lines,
-      minLines: 1,
-      textCapitalization: TextCapitalization.sentences,
-      style: const TextStyle(
-          fontFamily: 'Outfit', fontSize: 14, color: AppTheme.textPrimary),
-      decoration: InputDecoration(
-        hintText: hint,
-        hintStyle: const TextStyle(
-            fontFamily: 'Outfit', fontSize: 13, color: AppTheme.textMuted),
-        filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.04),
-        isDense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-          borderSide: const BorderSide(color: AppTheme.border),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-          borderSide: const BorderSide(color: AppTheme.border),
-        ),
-      ),
-    );
-  }
-
-  Widget _dropdown({
-    required String value,
-    required List<String> items,
-    required ValueChanged<String?> onChanged,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
-        borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-        border: Border.all(color: AppTheme.border),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: value,
-          isExpanded: true,
-          dropdownColor: AppTheme.bgCard,
-          icon: const Icon(Icons.expand_more_rounded, color: AppTheme.textMuted),
-          items: items
-              .map((i) => DropdownMenuItem(
-                    value: i,
-                    child: Text(i,
-                        style: const TextStyle(
-                            fontFamily: 'Outfit',
-                            fontSize: 14,
-                            color: AppTheme.textPrimary)),
-                  ))
-              .toList(),
-          onChanged: onChanged,
-        ),
-      ),
+class _ConcernPickerState extends State<_ConcernPicker> {
+  late final _selected = widget.selected.toSet();
+  String _query = '';
+  @override
+  Widget build(BuildContext context) {
+    final choices = Counselling.concerns
+        .where((c) => c.toLowerCase().contains(_query.toLowerCase()))
+        .toList();
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: SizedBox(
+          height: MediaQuery.sizeOf(context).height * .78,
+          child: Column(children: [
+            Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 12, 0),
+                child: Row(children: [
+                  const Expanded(
+                      child: Text('What is on your mind?',
+                          style: TextStyle(
+                              fontSize: 21, fontWeight: FontWeight.w600))),
+                  IconButton(
+                      tooltip: 'Close topics',
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close)),
+                ])),
+            Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                child: TextField(
+                  key: const ValueKey('search-concerns'),
+                  decoration: const InputDecoration(
+                      hintText: 'Search topics',
+                      prefixIcon: Icon(Icons.search)),
+                  onChanged: (value) => setState(() => _query = value.trim()),
+                )),
+            Expanded(
+                child: choices.isEmpty
+                    ? const Center(
+                        child: Padding(
+                            padding: EdgeInsets.all(20),
+                            child: Text(
+                                'No matching topic. Try another word, or choose Other / not sure.',
+                                textAlign: TextAlign.center)))
+                    : ListView.builder(
+                        itemCount: choices.length,
+                        itemBuilder: (_, i) {
+                          final concern = choices[i];
+                          final chosen = _selected.contains(concern);
+                          return CheckboxListTile(
+                            value: chosen,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            title: Text(concern,
+                                style: const TextStyle(
+                                    fontSize: 15, height: 1.35)),
+                            onChanged: !chosen &&
+                                    _selected.length >= Counselling.maxConcerns
+                                ? null
+                                : (checked) => setState(() {
+                                      if (checked == true) {
+                                        _selected.add(concern);
+                                      } else {
+                                        _selected.remove(concern);
+                                      }
+                                    }),
+                          );
+                        })),
+            Padding(
+                padding: const EdgeInsets.all(20),
+                child: SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: () => Navigator.pop(
+                          context,
+                          Counselling.concerns
+                              .where(_selected.contains)
+                              .toList()),
+                      child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Text(
+                              'Done · ${_selected.length}/${Counselling.maxConcerns} selected')),
+                    ))),
+          ])),
     );
   }
 }
@@ -439,8 +412,7 @@ Future<void> openUpiApp(BuildContext context) async {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-              'No UPI app found. Scan the QR, or pay the ID by hand.',
+          content: Text('No UPI app found. Scan the QR, or pay the ID by hand.',
               style: TextStyle(fontFamily: 'Outfit')),
           backgroundColor: AppTheme.danger,
         ),

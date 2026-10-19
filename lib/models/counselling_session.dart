@@ -53,13 +53,13 @@ enum CounsellingStatus {
       };
 
   String get label => switch (this) {
-        CounsellingStatus.awaitingPayment => 'Awaiting payment',
-        CounsellingStatus.paymentSubmitted => 'Payment to verify',
+        CounsellingStatus.awaitingPayment => 'Waiting for approval',
+        CounsellingStatus.paymentSubmitted => 'Waiting for approval',
         CounsellingStatus.approved => 'Approved — choosing format',
         CounsellingStatus.meetRequested => 'Call requested',
         CounsellingStatus.active => 'Session live',
         CounsellingStatus.ended => 'Ended',
-        CounsellingStatus.rejected => 'Payment rejected',
+        CounsellingStatus.rejected => 'Request declined',
       };
 }
 
@@ -162,7 +162,7 @@ class CounsellingSession {
   /// The API speaks ISO 8601. Firestore spoke `Timestamp`, which is why this
   /// used to sniff the type — there is only one wire format now.
   static DateTime? _date(dynamic v) =>
-      v is String ? DateTime.tryParse(v) : null;
+      v is String ? DateTime.tryParse(v)?.toLocal() : null;
 
   factory CounsellingSession.fromJson(Map<String, dynamic> d) {
     return CounsellingSession(

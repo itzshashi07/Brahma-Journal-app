@@ -16,6 +16,8 @@
 /// to a member and "the queue" to an operator. The caller says which it is.
 library;
 
+import '../constants/counselling.dart';
+
 /// Routes this app can actually open, longest-prefix first so `/counselling`
 /// does not swallow `/counselling/inbox`.
 const _known = <String>[
@@ -50,6 +52,12 @@ const _known = <String>[
 String? appRouteFor(String? raw, {bool isAdminAlert = false}) {
   final route = (raw ?? '').trim();
   if (route.isEmpty || !route.startsWith('/')) return null;
+  // A session alert still in someone's tray from before counselling was
+  // switched off. Opening it would only bounce off the route guard.
+  if (!Counselling.enabled &&
+      (route == '/counselling' || route.startsWith('/counselling/'))) {
+    return null;
+  }
 
   if (isAdminAlert) {
     switch (route) {

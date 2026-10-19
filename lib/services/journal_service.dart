@@ -59,11 +59,10 @@ class JournalService {
           .map((e) => JournalEntry.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList();
     } catch (e) {
-      // The journal screen renders an empty state rather than an error, which
-      // is the existing behaviour and the right one — a member opening their
-      // diary to a stack trace is worse than one opening it to "nothing yet".
+      // A failed request must not masquerade as an empty diary. The provider
+      // retains the last successful result and exposes a retry state.
       debugPrint('❌ getEntries failed: $e');
-      return [];
+      rethrow;
     }
   }
 

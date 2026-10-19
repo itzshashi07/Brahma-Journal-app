@@ -10,23 +10,14 @@ import '../../providers/auth_provider.dart';
 import '../../services/counselling_service.dart';
 import '../../widgets/sacred.dart';
 import 'counselling_chat_view.dart';
+import 'counselling_actions.dart';
 import 'counselling_screen.dart' show openMeet;
 
-/// The counsellor's side of the room.
-///
-/// Three tabs, because the operator has three genuinely different jobs and one
-/// undifferentiated list buried all of them:
-///
-///   • **To verify** — somebody has paid and is waiting. This is money and a
-///     person in distress, so it is the tab that opens first and the only one
-///     that carries a count in its label.
-///   • **Active chats** — every live conversation, newest reply on top, with a
-///     dot on the ones where the member spoke last. This is the "all chats"
-///     view: what is running right now and who is waiting on a reply.
-///   • **All** — everything, including finished sessions still inside their
-///     two-hour window.
+/// Admin requests, live chats and recent conversations, grouped by the next
+/// action so someone waiting for a first reply is easy to find.
 class CounsellingInboxScreen extends StatefulWidget {
-  const CounsellingInboxScreen({super.key});
+  const CounsellingInboxScreen({super.key, this.service});
+  final CounsellingService? service;
 
   @override
   State<CounsellingInboxScreen> createState() => _CounsellingInboxScreenState();
@@ -34,7 +25,8 @@ class CounsellingInboxScreen extends StatefulWidget {
 
 class _CounsellingInboxScreenState extends State<CounsellingInboxScreen>
     with SingleTickerProviderStateMixin {
-  final _service = CounsellingService();
+  late final _service = widget.service ?? CounsellingService();
+  late final _inboxStream = _service.streamAll();
   late final TabController _tabs = TabController(length: 3, vsync: this);
 
   @override
@@ -45,6 +37,7 @@ class _CounsellingInboxScreenState extends State<CounsellingInboxScreen>
 
   @override
   void dispose() {
+    if (widget.service == null) _service.dispose();
     _tabs.dispose();
     super.dispose();
   }
@@ -57,7 +50,8 @@ class _CounsellingInboxScreenState extends State<CounsellingInboxScreen>
       return const Scaffold(
         body: Center(
           child: Text('Admins only.',
-              style: TextStyle(fontFamily: 'Outfit', color: AppTheme.textMuted)),
+              style:
+                  TextStyle(fontFamily: 'Outfit', color: AppTheme.textMuted)),
         ),
       );
     }
@@ -66,12 +60,14 @@ class _CounsellingInboxScreenState extends State<CounsellingInboxScreen>
       body: SacredBackdrop(
         child: SafeArea(
           child: StreamBuilder<List<CounsellingSession>>(
-            stream: _service.streamAll(),
+            stream: _inboxStream,
             builder: (context, snap) {
               final all = snap.data ?? const <CounsellingSession>[];
 
               final toVerify = all
-                  .where((s) => s.status == CounsellingStatus.paymentSubmitted)
+                  .where((s) =>
+                      s.status == CounsellingStatus.paymentSubmitted ||
+                      s.status == CounsellingStatus.awaitingPayment)
                   .toList()
                 ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
@@ -106,7 +102,7 @@ class _CounsellingInboxScreenState extends State<CounsellingInboxScreen>
                     tabs: [
                       Tab(
                         child: _TabLabel(
-                          text: 'To verify',
+                          text: 'Waiting list',
                           count: toVerify.length,
                           urgent: true,
                         ),
@@ -120,38 +116,38 @@ class _CounsellingInboxScreenState extends State<CounsellingInboxScreen>
                       const Tab(text: 'All'),
                     ],
                   ),
-                  if (snap.hasError)
-                    Padding(
-                      padding: const EdgeInsets.all(AppTheme.space5),
-                      child: Text('Could not load sessions: ${snap.error}',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                              fontFamily: 'Outfit',
-                              color: Colors.redAccent,
-                              fontSize: 13)),
-                    ),
                   Expanded(
-                    child: !snap.hasData
-                        ? const Center(
-                            child: CircularProgressIndicator(
-                                color: AppTheme.primary))
-                        : TabBarView(
-                            controller: _tabs,
-                            children: [
-                              _list(
-                                toVerify,
-                                empty: 'Nothing waiting on you. '
-                                    'New payments land here the moment they are sent.',
+                    child: snap.hasError
+                        ? Center(
+                            child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                const Text('Could not load requests.'),
+                                TextButton(
+                                    onPressed: () => _service.refresh(),
+                                    child: const Text('Retry')),
+                              ]))
+                        : !snap.hasData
+                            ? const Center(
+                                child: CircularProgressIndicator(
+                                    color: AppTheme.primary))
+                            : TabBarView(
+                                controller: _tabs,
+                                children: [
+                                  _list(
+                                    toVerify,
+                                    empty: 'Nothing waiting on you. '
+                                        'New support requests appear here for approval.',
+                                  ),
+                                  _list(
+                                    active,
+                                    empty: 'No live sessions right now.',
+                                    asChats: true,
+                                  ),
+                                  _list(everything,
+                                      empty: 'No counselling requests yet.'),
+                                ],
                               ),
-                              _list(
-                                active,
-                                empty: 'No live sessions right now.',
-                                asChats: true,
-                              ),
-                              _list(everything,
-                                  empty: 'No counselling requests yet.'),
-                            ],
-                          ),
                   ),
                 ],
               );
@@ -191,11 +187,17 @@ class _CounsellingInboxScreenState extends State<CounsellingInboxScreen>
           ? _ChatRow(
               session: sessions[i],
               onOpen: () => _openChat(sessions[i]),
-              onEnd: () => _service.endSession(sessions[i].id),
+              onEnd: () =>
+                  _changeConversation(sessions[i], CounsellingAction.end),
+              onDelete: () =>
+                  _changeConversation(sessions[i], CounsellingAction.delete),
             )
           : _SessionTile(
               session: sessions[i],
-              service: _service,
+              onEnd: () =>
+                  _changeConversation(sessions[i], CounsellingAction.end),
+              onDelete: () =>
+                  _changeConversation(sessions[i], CounsellingAction.delete),
               onOpenChat: () => _openChat(sessions[i]),
               onVerify: () => _verify(sessions[i]),
               onApproveMeeting: () => _approveMeeting(sessions[i]),
@@ -203,8 +205,8 @@ class _CounsellingInboxScreenState extends State<CounsellingInboxScreen>
     );
   }
 
-  void _openChat(CounsellingSession session) {
-    Navigator.of(context).push(
+  Future<void> _openChat(CounsellingSession session) async {
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => Scaffold(
           body: SacredBackdrop(
@@ -218,6 +220,20 @@ class _CounsellingInboxScreenState extends State<CounsellingInboxScreen>
         ),
       ),
     );
+    if (mounted) await _service.refresh();
+  }
+
+  Future<void> _changeConversation(
+      CounsellingSession session, CounsellingAction action) async {
+    final changed = await confirmCounsellingAction(
+        context: context, service: _service, session: session, action: action);
+    if (changed && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(action == CounsellingAction.delete
+            ? 'Conversation deleted.'
+            : 'Session ended.'),
+      ));
+    }
   }
 
   /// Confirming a video call and issuing a room for it.
@@ -309,7 +325,8 @@ class _CounsellingInboxScreenState extends State<CounsellingInboxScreen>
       ),
     );
 
-    if (link == null) return;
+    ctrl.dispose();
+    if (link == null || !mounted) return;
     try {
       await _service.approveMeeting(sessionId: session.id, link: link);
     } catch (e) {
@@ -324,145 +341,62 @@ class _CounsellingInboxScreenState extends State<CounsellingInboxScreen>
     }
   }
 
-  /// The verification step, as its own sheet.
-  ///
-  /// Approving is an irreversible money decision made against a bank statement
-  /// in another app, so the transaction reference is presented large and
-  /// selectable, and both outcomes are one deliberate tap rather than two
-  /// small buttons on a crowded card.
+  /// Review the member's request before opening or declining the chat.
   Future<void> _verify(CounsellingSession session) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (ctx) => SafeArea(
-        child: Container(
-          margin: const EdgeInsets.all(AppTheme.space3),
-          padding: const EdgeInsets.all(AppTheme.space5),
-          decoration: BoxDecoration(
-            color: AppTheme.bgCard,
-            borderRadius: BorderRadius.circular(AppTheme.radiusXl),
-            border: Border.all(color: AppTheme.border),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Verify payment',
-                style: const TextStyle(
-                    fontFamily: 'Outfit',
-                    fontSize: 19,
-                    fontWeight: FontWeight.w800,
-                    color: AppTheme.textPrimary),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                '${session.name} · ${session.concern}',
-                style: const TextStyle(
-                    fontFamily: 'Outfit',
-                    fontSize: 12.5,
-                    color: AppTheme.textMuted),
-              ),
-              const SizedBox(height: AppTheme.space5),
-              Container(
-                padding: const EdgeInsets.all(AppTheme.space4),
-                decoration: BoxDecoration(
-                  color: AppTheme.accent.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                  border:
-                      Border.all(color: AppTheme.accent.withValues(alpha: 0.3)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '₹${session.amount == 0 ? Counselling.fee : session.amount}  ·  ${session.paymentMode}',
-                      style: const TextStyle(
-                          fontFamily: 'Outfit',
-                          fontSize: 17,
-                          fontWeight: FontWeight.w800,
-                          color: AppTheme.accentLight),
-                    ),
-                    const SizedBox(height: AppTheme.space2),
-                    const Text('TRANSACTION ID',
-                        style: TextStyle(
-                            fontFamily: 'Outfit',
-                            fontSize: 9.5,
-                            letterSpacing: 1,
-                            fontWeight: FontWeight.w800,
-                            color: AppTheme.textMuted)),
-                    const SizedBox(height: 2),
-                    SelectableText(
-                      session.transactionId.isEmpty
-                          ? '(none sent)'
-                          : session.transactionId,
-                      style: const TextStyle(
-                          fontFamily: 'Outfit',
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: AppTheme.textPrimary),
-                    ),
-                    const SizedBox(height: AppTheme.space3),
-                    Text(
-                      'Check this against ${Counselling.upiId} before approving. '
-                      'Approving opens the session immediately.',
-                      style: const TextStyle(
-                          fontFamily: 'Outfit',
-                          fontSize: 11.5,
-                          height: 1.5,
-                          color: AppTheme.textMuted),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: AppTheme.space5),
-              SacredButton(
-                label: 'Payment received — open session',
-                icon: Icons.verified_rounded,
-                onTap: () async {
-                  Navigator.pop(ctx);
-                  await _service.approve(session.id);
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('${session.name}\'s session is open.',
-                            style: const TextStyle(fontFamily: 'Outfit')),
-                        backgroundColor: AppTheme.success,
-                      ),
-                    );
-                  }
-                },
-              ),
-              const SizedBox(height: AppTheme.space2),
-              OutlinedButton(
-                onPressed: () async {
-                  Navigator.pop(ctx);
-                  await _service.reject(session.id);
-                },
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Colors.redAccent),
-                  padding: const EdgeInsets.symmetric(vertical: AppTheme.space3),
-                ),
-                child: const Text('Could not find this payment',
-                    style: TextStyle(
-                        fontFamily: 'Outfit',
-                        fontSize: 13,
-                        color: Colors.redAccent)),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Decide later',
-                    style: TextStyle(
-                        fontFamily: 'Outfit',
-                        fontSize: 12.5,
-                        color: AppTheme.textMuted)),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    if (session.status != CounsellingStatus.awaitingPayment &&
+        session.status != CounsellingStatus.paymentSubmitted) {
+      return;
+    }
+    final action = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: const Text('Review support request'),
+              content: SingleChildScrollView(
+                  child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Text('${session.name} · ${session.language}'),
+                    const SizedBox(height: 12),
+                    Text(session.concern,
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 8),
+                    Text(session.details),
+                    const SizedBox(height: 16),
+                    const Text(
+                        'Approval opens a free private chat and notifies this member. Only approve when you can respond.'),
+                  ])),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Later')),
+                TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Decline')),
+                FilledButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('Approve chat')),
+              ],
+            ));
+    if (action == null) return;
+    try {
+      if (action) {
+        await _service.approve(session.id);
+      } else {
+        await _service.reject(session.id);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(action
+                ? 'Chat opened. Member notified.'
+                : 'Request declined.')));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Could not update the request. Please retry.')));
+      }
+    }
   }
 }
 
@@ -471,7 +405,8 @@ class _TabLabel extends StatelessWidget {
   final int count;
   final bool urgent;
 
-  const _TabLabel({required this.text, required this.count, this.urgent = false});
+  const _TabLabel(
+      {required this.text, required this.count, this.urgent = false});
 
   @override
   Widget build(BuildContext context) {
@@ -513,11 +448,13 @@ class _ChatRow extends StatelessWidget {
   final CounsellingSession session;
   final VoidCallback onOpen;
   final VoidCallback onEnd;
+  final VoidCallback onDelete;
 
   const _ChatRow({
     required this.session,
     required this.onOpen,
     required this.onEnd,
+    required this.onDelete,
   });
 
   @override
@@ -552,8 +489,7 @@ class _ChatRow extends StatelessWidget {
                   children: [
                     CircleAvatar(
                       radius: 21,
-                      backgroundColor:
-                          AppTheme.primary.withValues(alpha: 0.22),
+                      backgroundColor: AppTheme.primary.withValues(alpha: 0.22),
                       child: Text(
                         session.name.isEmpty
                             ? '?'
@@ -651,6 +587,7 @@ class _ChatRow extends StatelessWidget {
                   onSelected: (v) {
                     if (v == 'open') onOpen();
                     if (v == 'end') onEnd();
+                    if (v == 'delete') onDelete();
                   },
                   itemBuilder: (_) => const [
                     PopupMenuItem(
@@ -660,6 +597,10 @@ class _ChatRow extends StatelessWidget {
                               fontFamily: 'Outfit',
                               fontSize: 13,
                               color: AppTheme.textPrimary)),
+                    ),
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: Text('Delete conversation'),
                     ),
                     PopupMenuItem(
                       value: 'end',
@@ -684,14 +625,16 @@ class _ChatRow extends StatelessWidget {
 /// deciding anything.
 class _SessionTile extends StatelessWidget {
   final CounsellingSession session;
-  final CounsellingService service;
+  final VoidCallback onEnd;
+  final VoidCallback onDelete;
   final VoidCallback onOpenChat;
   final VoidCallback onVerify;
   final VoidCallback onApproveMeeting;
 
   const _SessionTile({
     required this.session,
-    required this.service,
+    required this.onEnd,
+    required this.onDelete,
     required this.onOpenChat,
     required this.onVerify,
     required this.onApproveMeeting,
@@ -712,9 +655,9 @@ class _SessionTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final needsVerification =
-        session.status == CounsellingStatus.paymentSubmitted;
-    final needsMeetApproval =
-        session.status == CounsellingStatus.meetRequested;
+        session.status == CounsellingStatus.paymentSubmitted ||
+            session.status == CounsellingStatus.awaitingPayment;
+    final needsMeetApproval = session.status == CounsellingStatus.meetRequested;
 
     return Container(
       margin: const EdgeInsets.only(bottom: AppTheme.space3),
@@ -733,35 +676,22 @@ class _SessionTile extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    session.name.isEmpty ? 'Unnamed member' : session.name,
-                    style: const TextStyle(
-                        fontFamily: 'Outfit',
-                        fontSize: 15.5,
-                        fontWeight: FontWeight.w700,
-                        color: AppTheme.textPrimary),
-                  ),
-                ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _statusColor.withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(AppTheme.radiusPill),
-                  ),
-                  child: Text(
-                    session.status.label,
-                    style: TextStyle(
-                        fontFamily: 'Outfit',
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w700,
-                        color: _statusColor),
-                  ),
-                ),
-              ],
+            Text(session.name.isEmpty ? 'Member' : session.name,
+                style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textPrimary)),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                  color: _statusColor.withValues(alpha: .16),
+                  borderRadius: BorderRadius.circular(12)),
+              child: Text(session.status.label,
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: _statusColor)),
             ),
             const SizedBox(height: 4),
             Text(
@@ -798,7 +728,6 @@ class _SessionTile extends StatelessWidget {
                     color: AppTheme.textMuted),
               ),
             ],
-
             if (session.transactionId.isNotEmpty) ...[
               const SizedBox(height: AppTheme.space3),
               Container(
@@ -806,8 +735,8 @@ class _SessionTile extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: AppTheme.accent.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-                  border:
-                      Border.all(color: AppTheme.accent.withValues(alpha: 0.25)),
+                  border: Border.all(
+                      color: AppTheme.accent.withValues(alpha: 0.25)),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -832,114 +761,48 @@ class _SessionTile extends StatelessWidget {
                 ),
               ),
             ],
-
             const SizedBox(height: AppTheme.space4),
-
-            // The two things an operator ever wants to do with a request:
-            // check the money, or talk to the person. Both are always here,
-            // and Verify leads when there is a payment waiting.
-            Row(
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
               children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: onOpenChat,
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(
-                          color: AppTheme.primary.withValues(alpha: 0.7)),
-                      padding:
-                          const EdgeInsets.symmetric(vertical: AppTheme.space3),
-                    ),
-                    icon: const Icon(Icons.chat_bubble_outline_rounded,
-                        size: 16, color: AppTheme.primaryLight),
-                    label: const Text('Chat',
-                        style: TextStyle(
-                            fontFamily: 'Outfit',
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: AppTheme.primaryLight)),
+                OutlinedButton.icon(
+                  onPressed: onOpenChat,
+                  icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18),
+                  label: const Text('Open chat'),
+                ),
+                if (needsVerification)
+                  FilledButton.icon(
+                    onPressed: onVerify,
+                    icon: const Icon(Icons.fact_check_outlined, size: 18),
+                    label: const Text('Review request'),
                   ),
-                ),
-                const SizedBox(width: AppTheme.space3),
-                Expanded(
-                  flex: needsVerification || needsMeetApproval ? 2 : 1,
-                  child: needsMeetApproval
-                      // Takes priority over Verify: the payment is already
-                      // settled by the time a call can be requested, and this
-                      // is the person actually being kept waiting.
-                      ? SacredButton(
-                          label: 'Send link',
-                          icon: Icons.videocam_rounded,
-                          onTap: onApproveMeeting,
-                        )
-                      : needsVerification
-                      ? SacredButton(
-                          label: 'Verify',
-                          icon: Icons.verified_outlined,
-                          onTap: onVerify,
-                        )
-                      : OutlinedButton.icon(
-                          // Still offered outside the waiting state: a member
-                          // may have paid and not reported it, and the operator
-                          // needs a way to open the session anyway.
-                          onPressed: onVerify,
-                          style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: AppTheme.border),
-                            padding: const EdgeInsets.symmetric(
-                                vertical: AppTheme.space3),
-                          ),
-                          icon: const Icon(Icons.verified_outlined,
-                              size: 16, color: AppTheme.textMuted),
-                          label: const Text('Verify',
-                              style: TextStyle(
-                                  fontFamily: 'Outfit',
-                                  fontSize: 13,
-                                  color: AppTheme.textMuted)),
-                        ),
-                ),
+                if (needsMeetApproval)
+                  FilledButton.icon(
+                    onPressed: onApproveMeeting,
+                    icon: const Icon(Icons.videocam_rounded, size: 18),
+                    label: const Text('Send link'),
+                  ),
               ],
             ),
-
             const SizedBox(height: AppTheme.space2),
-            Row(
-              children: [
-                Text(
-                  DateFormat('dd MMM, h:mm a').format(session.createdAt),
-                  style: const TextStyle(
-                      fontFamily: 'Outfit',
-                      fontSize: 11,
-                      color: AppTheme.textMuted),
-                ),
-                const Spacer(),
-                if (session.mode == CounsellingMode.meet)
-                  TextButton.icon(
+            Text(DateFormat('dd MMM, h:mm a').format(session.createdAt),
+                style:
+                    const TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+            Wrap(spacing: 8, children: [
+              if (session.mode == CounsellingMode.meet &&
+                  session.meetLink.isNotEmpty)
+                TextButton.icon(
                     onPressed: () => openMeet(context, session.meetLink),
-                    style: TextButton.styleFrom(
-                      minimumSize: Size.zero,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: AppTheme.space2),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    icon: const Icon(Icons.videocam_outlined, size: 15),
-                    label: const Text('Join call',
-                        style: TextStyle(fontFamily: 'Outfit', fontSize: 12.5)),
-                  ),
-                if (session.status == CounsellingStatus.active)
-                  TextButton(
-                    onPressed: () => service.endSession(session.id),
-                    style: TextButton.styleFrom(
-                      minimumSize: Size.zero,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: AppTheme.space2),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: const Text('End session',
-                        style: TextStyle(
-                            fontFamily: 'Outfit',
-                            fontSize: 12,
-                            color: AppTheme.textMuted)),
-                  ),
-              ],
-            ),
+                    icon: const Icon(Icons.videocam_outlined, size: 18),
+                    label: const Text('Join call')),
+              if (session.isLive)
+                TextButton(onPressed: onEnd, child: const Text('End session')),
+              TextButton.icon(
+                  onPressed: onDelete,
+                  icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                  label: const Text('Delete conversation')),
+            ]),
           ],
         ),
       ),
