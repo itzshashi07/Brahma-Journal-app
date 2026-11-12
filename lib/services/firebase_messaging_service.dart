@@ -76,21 +76,9 @@ class FirebaseMessagingService {
     if (_initialized) return;
     _initialized = true;
 
-    // Remember that we asked, including a refusal. Do not interrupt every
-    // launch or ask twice through the local-notifications and FCM plugins.
-    final prefs = await SharedPreferences.getInstance();
-    const permissionKey = 'notification_permission_prompted';
-    var settings = await _messaging.getNotificationSettings();
-    if (prefs.getBool(permissionKey) != true) {
-      await prefs.setBool(permissionKey, true);
-      if (settings.authorizationStatus == AuthorizationStatus.notDetermined ||
-          (defaultTargetPlatform == TargetPlatform.android &&
-              settings.authorizationStatus == AuthorizationStatus.denied)) {
-        settings = await _messaging.requestPermission(
-          alert: true, badge: true, sound: true,
-        );
-      }
-    }
+    // Registration is quiet. The member requests permission from Profile,
+    // after seeing the app's value, instead of being interrupted at first launch.
+    final settings = await _messaging.getNotificationSettings();
     debugPrint('▶ fcm: permission ${settings.authorizationStatus.name}');
 
     // Suppress the system's own banner for foreground messages on iOS. Ours is
@@ -129,6 +117,19 @@ class FirebaseMessagingService {
       _token = token;
       if (FirebaseAuth.instance.currentUser != null) await _registerToken();
     });
+  }
+
+  /// Invoked only by an explicit user action.
+  Future<bool> requestPermission() async {
+    final settings = await _messaging.requestPermission(
+      alert: true, badge: true, sound: true,
+    );
+    final allowed = settings.authorizationStatus == AuthorizationStatus.authorized ||
+        settings.authorizationStatus == AuthorizationStatus.provisional;
+    if (allowed && FirebaseAuth.instance.currentUser != null) {
+      await _registerToken();
+    }
+    return allowed;
   }
 
   // ─────────────────────────── registration ───────────────────────────

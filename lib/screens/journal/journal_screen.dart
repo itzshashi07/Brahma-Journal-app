@@ -1152,6 +1152,9 @@ class _JournalScreenState extends State<JournalScreen> {
 /// an id that is no longer in rotation.
 class CheckInLabels {
   static const known = <String, String>{
+    'reset_topic': 'What was on my mind',
+    'reset_thought': 'My reset reflection',
+    'reset_next_step': 'My next small step',
     'day': 'How the day was',
     'body': 'How the body was',
     'family': 'How everyone at home was',

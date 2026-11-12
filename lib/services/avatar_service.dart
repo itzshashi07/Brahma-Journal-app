@@ -1,4 +1,5 @@
 import '../core/constants/spiritual_avatars.dart';
+import '../core/constants/profile_pictures.dart';
 import 'api_service.dart';
 
 /// Profile avatar selection.
@@ -34,7 +35,8 @@ class AvatarService {
   }) async {
     // Rejected here as well as on the server, so a stale build fails with a
     // message that names the problem rather than a 400 from the API.
-    if (SpiritualAvatars.byId(avatarId) == null) {
+    if (!ProfilePictures.contains(avatarId) &&
+        SpiritualAvatars.byId(avatarId) == null) {
       throw ArgumentError('Unknown avatar: $avatarId');
     }
 
@@ -49,6 +51,6 @@ class AvatarService {
     required String? currentAvatarId,
   }) async {
     if (currentAvatarId != null && currentAvatarId.isNotEmpty) return;
-    await selectAvatar(avatarId: SpiritualAvatars.defaultFor(gender).id);
+    await selectAvatar(avatarId: ProfilePictures.defaultId);
   }
 }

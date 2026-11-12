@@ -51,6 +51,7 @@ app.*.map.json
 # Gradle build reports
 android/build/
 android/app/build/
+android/.kotlin/
 
 # Release signing — the upload key and its passwords.
 #

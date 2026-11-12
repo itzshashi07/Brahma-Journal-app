@@ -151,27 +151,12 @@ class _DailyCheckInSheetState extends State<DailyCheckInSheet> {
       // Merge into today's entry rather than creating a second record, so a
       // member who also writes a full journal entry does not end up with two.
       final existing = journal.todaysEntry;
-      final entry = JournalEntry(
-        uid: auth.user!.uid,
-        mood: _mood ?? existing?.mood ?? 3,
-        newHabit: existing?.newHabit ?? '',
-        tinyStep: existing?.tinyStep ?? '',
-        badHabit: existing?.badHabit ?? '',
-        affirmations: existing?.affirmations ?? '',
-        visualization: existing?.visualization ?? '',
-        nightRoutine: existing?.nightRoutine ?? '',
-        triggerThought: existing?.triggerThought ?? '',
-        triggerResponse: existing?.triggerResponse ?? '',
-        bestMoment: answers['exciting'] ?? existing?.bestMoment ?? '',
-        shivBabaLine: existing?.shivBabaLine ?? '',
-        sleepReflection: existing?.sleepReflection ?? '',
-        energyLevel: existing?.energyLevel ?? '',
-        practices: existing?.practices ?? const [],
-        influences: existing?.influences ?? const [],
-        habitsDone: existing?.habitsDone ?? const [],
-        challenges: existing?.challenges ?? const [],
-        checkIn: {...?existing?.checkIn, ...answers},
-        createdAt: existing?.createdAt ?? DateTime.now(),
+      final base = existing ?? JournalEntry(
+        uid: auth.user!.uid, mood: _mood ?? 3, createdAt: DateTime.now());
+      final entry = base.copyWith(
+        mood: _mood ?? base.mood,
+        bestMoment: answers['exciting'] ?? base.bestMoment,
+        checkIn: {...base.checkIn, ...answers},
       );
 
       await journal.saveEntry(entry, existingId: existing?.id);

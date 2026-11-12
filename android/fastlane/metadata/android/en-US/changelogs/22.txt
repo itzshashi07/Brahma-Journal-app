@@ -1,0 +1,6 @@
+A clearer place to start: try a 2-minute reset before creating an account.
+Choose one manageable next step and save it in your journal.
+See a reflection on your last seven days.
+Choose from six ready-made profile pictures.
+Simpler signup and optional notification permission from Profile.
+Fixed journal-history pagination and check-in data preservation.

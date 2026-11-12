@@ -4,13 +4,18 @@ import java.util.Properties
 // key lets somebody else sign a build as this app, and a lost one means the
 // listing can never be updated again.
 //
-// Absent on a machine that only builds debug — the release block below falls
-// back to the debug key in that case, so `flutter run --release` still works
-// for a developer who does not have the key.
+// Debug builds do not require it. Every release task refuses to run without
+// the upload key, so an accidental debug-signed bundle cannot be shipped.
 val keystoreProperties = Properties().apply {
     val f = rootProject.file("key.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
+
+// Device tests use a separate package so installing them cannot erase a
+// member's existing app or journal session on the emulator.
+val isQaBuild = providers.gradleProperty("innenflowTestBuild").orNull == "true"
+val hasUploadKey = listOf("keyAlias", "keyPassword", "storeFile", "storePassword")
+    .all { !keystoreProperties.getProperty(it).isNullOrBlank() }
 
 plugins {
     id("com.android.application")
@@ -41,7 +46,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.brahma.brahmaApp"
+        applicationId = if (isQaBuild) "com.brahma.brahmaApp.qa" else "com.brahma.brahmaApp"
         multiDexEnabled = true
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
@@ -62,17 +67,24 @@ android {
 
     buildTypes {
         release {
-            // The upload key when it is present, the debug key when it is not.
-            //
-            // Play refuses a debug-signed upload outright, so this is what makes
-            // the build shippable at all. The fallback exists so a checkout
-            // without the key can still produce a runnable release build.
-            signingConfig = if (keystoreProperties.getProperty("storeFile") != null) {
+            // The task-graph guard below requires the upload key for releases.
+            signingConfig = if (hasUploadKey) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug")
             }
         }
+    }
+}
+
+tasks.matching { it.name.endsWith("GoogleServices") }.configureEach {
+    enabled = !isQaBuild
+}
+
+gradle.taskGraph.whenReady {
+    if (allTasks.any { it.name.contains("Release") }) {
+        check(!isQaBuild) { "QA packages must never be built for release." }
+        check(hasUploadKey) { "A release requires the existing Play upload key; debug signing is forbidden." }
     }
 }
 

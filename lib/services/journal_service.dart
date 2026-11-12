@@ -25,7 +25,8 @@ import 'api_service.dart';
 ///     that stores the entry, so there is no window where the entry exists and
 ///     the count disagrees, and no second round trip on the save path.
 class JournalService {
-  final ApiService _api = ApiService();
+  JournalService({ApiService? api}) : _api = api ?? ApiService();
+  final ApiService _api;
 
   /// Saves a new entry, or updates one that already exists.
   ///
@@ -53,11 +54,23 @@ class JournalService {
   /// to. Passing somebody else's uid does not and cannot return their journal.
   Future<List<JournalEntry>> getEntries([String? uid]) async {
     try {
-      final body = await _api.get('/api/entries', query: {'limit': '500'});
-      final list = (body?['entries'] as List? ?? const []);
-      return list
-          .map((e) => JournalEntry.fromJson(Map<String, dynamic>.from(e as Map)))
-          .toList();
+      final entries = <JournalEntry>[];
+      final seen = <String>{};
+      String? cursor;
+      do {
+        final body = await _api.get('/api/entries', query: {
+          'limit': '100', if (cursor != null) 'cursor': cursor,
+        });
+        final list = body?['entries'] as List? ?? const [];
+        entries.addAll(list.map((e) => JournalEntry.fromJson(
+            Map<String, dynamic>.from(e as Map))));
+        if (body?['hasMore'] != true) break;
+        cursor = body?['nextCursor'] as String?;
+        if (cursor == null || cursor.isEmpty || !seen.add(cursor)) {
+          throw ApiException(0, 'Could not load the rest of your journal. Please retry.');
+        }
+      } while (true);
+      return entries;
     } catch (e) {
       // A failed request must not masquerade as an empty diary. The provider
       // retains the last successful result and exposes a retry state.
@@ -67,7 +80,12 @@ class JournalService {
   }
 
   Future<JournalEntry?> getTodaysEntry([String? uid]) async {
-    return todaysEntryFrom(await getEntries());
+    // The newest entry is enough to find today; do not download the diary
+    // just to add a two-minute reset.
+    final body = await _api.get('/api/entries', query: {'limit': '1'});
+    final rows = body?['entries'] as List? ?? const [];
+    return todaysEntryFrom(rows.map((e) => JournalEntry.fromJson(
+        Map<String, dynamic>.from(e as Map))).toList());
   }
 
   /// Today's entry picked out of an already-loaded list.

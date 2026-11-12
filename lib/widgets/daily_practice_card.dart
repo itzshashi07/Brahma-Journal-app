@@ -9,11 +9,15 @@ class DailyPracticeCard extends StatelessWidget {
     required this.hasEntry,
     required this.onJournal,
     required this.onMeditate,
+    this.onReset,
+    this.hasPendingReset = false,
   });
 
   final bool hasEntry;
   final VoidCallback onJournal;
   final VoidCallback onMeditate;
+  final VoidCallback? onReset;
+  final bool hasPendingReset;
 
   @override
   Widget build(BuildContext context) {
@@ -37,7 +41,7 @@ class DailyPracticeCard extends StatelessWidget {
             const SizedBox(width: 8),
             Flexible(
                 child: Text(
-                    hasEntry ? 'A MOMENT, KEPT' : 'A LITTLE SPACE FOR YOU',
+                    hasEntry ? 'A MOMENT, KEPT' : 'YOUR TWO-MINUTE RESET',
                     style: const TextStyle(
                         fontSize: 11,
                         letterSpacing: 1.5,
@@ -48,7 +52,7 @@ class DailyPracticeCard extends StatelessWidget {
           Text(
               hasEntry
                   ? 'You showed up\nfor yourself.'
-                  : 'How are you,\nreally?',
+                  : 'A lot on\nyour mind?',
               style: const TextStyle(
                   fontSize: 32,
                   height: 1.12,
@@ -58,15 +62,19 @@ class DailyPracticeCard extends StatelessWidget {
           const SizedBox(height: 12),
           Text(
               hasEntry
-                  ? 'Your entry is saved. Return to it whenever you need.'
-                  : 'One honest thought is enough. Take a moment to make today yours.',
+                  ? 'Your entry is saved. Take another short pause whenever you need.'
+                  : 'Name what is taking up space. Choose one small next step. That is enough for today.',
               style: const TextStyle(
                   color: AppTheme.textSecondary, height: 1.5, fontSize: 15)),
           const SizedBox(height: 24),
           SacredButton(
-              label: hasEntry ? 'Return to your journal' : 'Write a little',
+              label: onReset == null
+                  ? (hasEntry ? 'Return to your journal' : 'Write a little')
+                  : (hasPendingReset ? 'Continue my reset' : 'Take a 2-minute reset'),
               icon: Icons.edit_note_rounded,
-              onTap: onJournal),
+              onTap: onReset ?? onJournal),
+          if (onReset != null) TextButton(onPressed: onJournal,
+              child: Text(hasEntry ? 'Open my journal' : 'I would rather write')),
           const SizedBox(height: 8),
           Center(
               child: TextButton.icon(

@@ -39,7 +39,7 @@ class _AvatarEditorState extends State<AvatarEditor> {
     try {
       await _service.selectAvatar(uid: widget.uid, avatarId: avatarId);
       if (!mounted) return;
-      _toast('Avatar updated ✨', AppTheme.success);
+      _toast('Profile picture updated', AppTheme.success);
       widget.onUpdated?.call();
     } catch (e) {
       if (mounted) {
@@ -122,7 +122,7 @@ class _AvatarEditorState extends State<AvatarEditor> {
         ),
         const SizedBox(height: AppTheme.space3),
         const Text(
-          'Tap to build your avatar',
+          'Choose from 6 profile pictures',
           style: TextStyle(
             fontFamily: 'Outfit',
             fontSize: 12,

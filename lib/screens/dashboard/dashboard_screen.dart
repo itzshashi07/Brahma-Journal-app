@@ -10,6 +10,8 @@ import '../../core/constants/thoughts_365.dart';
 import '../../core/utils/stats_utils.dart';
 import '../../widgets/sacred.dart';
 import '../../widgets/daily_practice_card.dart';
+import '../../widgets/weekly_reflection_card.dart';
+import '../../models/quick_reset.dart';
 import '../../widgets/retry_notice.dart';
 import '../../widgets/update_dialog.dart';
 import '../../widgets/welcome_celebration.dart';
@@ -333,6 +335,8 @@ class _DashboardScreenState extends State<DashboardScreen>
                       hasEntry: journal.todaysEntry != null,
                       onJournal: () => context.push('/journal'),
                       onMeditate: () => context.push('/meditation'),
+                      onReset: () => context.push('/reset'),
+                      hasPendingReset: QuickReset.pending?.completed == true,
                     ),
                     const SizedBox(height: 24),
                     if (journal.loading) ...[
@@ -344,6 +348,8 @@ class _DashboardScreenState extends State<DashboardScreen>
                       RetryNotice(message: journal.error!, onRetry: _refreshDashboard),
                       const SizedBox(height: 16),
                     ],
+                    if (journal.hasLoaded && journal.error == null)
+                      WeeklyReflectionCard(entries: journal.entries),
                     // Stats Row
                     Row(
                       children: [

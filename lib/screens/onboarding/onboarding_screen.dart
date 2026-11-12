@@ -48,20 +48,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           'you never have to decide what to do next.',
       flow: [
         _FlowStep('1', 'Read', 'Today\'s thought sets the tone', Icons.lightbulb_outline_rounded),
-        _FlowStep('2', 'Sit', 'Meditate with a timer and mantras', Icons.spa_outlined),
+        _FlowStep('2', 'Sit', 'Take a short breathing break', Icons.spa_outlined),
         _FlowStep('3', 'Write', 'Log your mood, habits and reflection', Icons.edit_note_rounded),
-        _FlowStep('4', 'Grow', 'Your streak and mood trend build themselves', Icons.trending_up_rounded),
+        _FlowStep('4', 'Grow', 'See your check-ins and mood over time', Icons.trending_up_rounded),
       ],
     ),
     _Slide(
       motif: SacredMotif.mandala,
       kicker: 'WHY IT STICKS',
-      title: 'The streak does\nthe hard part',
+      title: 'Make space\nfor a small habit',
       body:
-          'Motivation fades; a visible streak does not. Every entry extends it, the leaderboard '
-          'shows you are not practising alone, and your mood chart quietly proves the practice is working.',
+          'Every entry gives you a moment to pause. Your journal '
+          'keeps your reflections together, and your mood chart helps you notice changes over time.',
       bullets: [
-        _Bullet(Icons.local_fire_department_outlined, 'A streak you will not want to break'),
+        _Bullet(Icons.local_fire_department_outlined, 'A record you can return to'),
         _Bullet(Icons.groups_outlined, 'A community of seekers, ranked by consistency'),
         _Bullet(Icons.insights_outlined, 'Mood analytics that reveal the pattern'),
       ],
@@ -72,10 +72,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       title: 'Somewhere to put\nwhat you cannot say',
       body:
           'Some things need to leave your head without your name attached. Anonymous reflections '
-          'are posted under a generated name, never your own, and fade away after a week.',
+          'are posted under a generated name, never your own, and fade away after 30 days.',
       bullets: [
         _Bullet(Icons.visibility_off_outlined, 'Your identity is never stored on the post'),
-        _Bullet(Icons.auto_delete_outlined, 'Every reflection disappears after 7 days'),
+        _Bullet(Icons.auto_delete_outlined, 'Every reflection disappears after 30 days'),
         _Bullet(Icons.favorite_border_rounded, 'Replies from people walking the same path'),
       ],
     ),

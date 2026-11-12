@@ -2,7 +2,6 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../providers/auth_provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../widgets/sacred.dart';
@@ -69,14 +68,6 @@ class _SplashScreenState extends State<SplashScreen>
 
   /// Waits for session restoration and, on first run only, the introduction.
   Future<void> _boot() async {
-    final prefs = await SharedPreferences.getInstance();
-    final seenOnboarding = prefs.getBool('onboarding_completed') ?? false;
-
-    // Returning users should not wait through a fixed branding delay.
-    if (!seenOnboarding && mounted && !MediaQuery.disableAnimationsOf(context)) {
-      await _intro.forward().orCancel.catchError((_) {});
-    }
-
     if (!mounted || _navigated) return;
 
     // AuthProvider starts with loading = true and flips once Firebase reports
@@ -91,9 +82,7 @@ class _SplashScreenState extends State<SplashScreen>
     if (!mounted || _navigated) return;
     _navigated = true;
 
-    if (!seenOnboarding) {
-      context.go('/onboarding');
-    } else if (auth.isAuthenticated) {
+    if (auth.isAuthenticated) {
       context.go('/dashboard');
     } else {
       context.go('/welcome');

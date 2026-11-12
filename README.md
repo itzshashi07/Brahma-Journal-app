@@ -6,6 +6,30 @@ It is deliberately **religion-neutral**. The practices here come from traditions
 
 ---
 
+## Start with a two minute reset
+
+New members can try `/reset` before creating an account. They choose a mood,
+name a topic and pick one manageable next step. Unsaved words stay in memory
+for the current app session. Signing in lets them save the reset into today's
+journal without replacing existing habits or reflections. The dashboard offers
+this action first and shows a descriptive reflection on the last seven days.
+
+Profile pictures are six fixed portraits, shared with the website. Existing
+avatar IDs still render, but the custom character editor is no longer offered.
+Notification permission is requested only from the member's Profile action.
+
+For the Android release check, run:
+
+```bash
+bash scripts/verify-release.sh emulator-5554
+```
+
+This runs analysis, regression tests, isolated Android integration tests and
+then the signed release build **in sequence**. Do not add `--no-pub` between
+debug tests and release builds: Flutter must regenerate the mode-specific
+plugin registry. Play listing text and release notes live in
+`android/fastlane/metadata/android/en-US/`.
+
 ## 🌟 What is in it
 
 ### ✍️ Write

@@ -23,7 +23,7 @@ class _SignupScreenState extends State<SignupScreen> {
   final _passwordCtrl = TextEditingController();
   final _ageCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
-  String _selectedGender = 'male';
+  String? _selectedGender;
   String _selectedPlan = 'monthly'; // 'monthly' or 'annual'
 
   late Razorpay _razorpay;
@@ -72,7 +72,7 @@ class _SignupScreenState extends State<SignupScreen> {
       email: _emailCtrl.text.trim(),
       password: _passwordCtrl.text,
       name: _nameCtrl.text.trim(),
-      age: int.tryParse(_ageCtrl.text) ?? 25,
+      age: int.tryParse(_ageCtrl.text),
       gender: _selectedGender,
       phone: _phoneCtrl.text.trim(),
       paymentId: '',
@@ -93,7 +93,7 @@ class _SignupScreenState extends State<SignupScreen> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
       );
-      context.go('/onboarding');
+      context.go('/dashboard');
     } else {
       setState(() => _checkoutError = auth.error ?? 'Could not create your account.');
     }
@@ -172,7 +172,7 @@ class _SignupScreenState extends State<SignupScreen> {
       email: _emailCtrl.text.trim(),
       password: _passwordCtrl.text,
       name: _nameCtrl.text.trim(),
-      age: int.tryParse(_ageCtrl.text) ?? 25,
+      age: int.tryParse(_ageCtrl.text),
       gender: _selectedGender,
       phone: _phoneCtrl.text.trim(),
       paymentId: paymentId,
@@ -293,6 +293,7 @@ class _SignupScreenState extends State<SignupScreen> {
                     ),
                     const SizedBox(height: 16),
 
+                    if (AppConstants.paymentsEnabled) ...[
                     Row(
                       children: [
                         Expanded(
@@ -339,6 +340,8 @@ class _SignupScreenState extends State<SignupScreen> {
                       validator: (v) => (v == null || v.length < 10) ? 'Enter valid phone number' : null,
                     ),
                     const SizedBox(height: 16),
+
+                    ],
 
                     TextFormField(
                       controller: _emailCtrl,

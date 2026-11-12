@@ -10,6 +10,7 @@ import '../../core/constants/counselling.dart';
 import '../../widgets/avatar_editor.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/app_update_service.dart';
+import '../../services/firebase_messaging_service.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -26,6 +27,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? _selectedGender;
   bool _isSaving = false;
   bool _isLoading = true;
+
+  Future<void> _enableNotifications() async {
+    try {
+      final allowed = await FirebaseMessagingService().requestPermission();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(allowed
+          ? 'Notifications enabled for replies and updates.'
+          : 'Notifications are off. You can change this in your device settings.')));
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not update notification permission. Please try again.')));
+      }
+    }
+  }
 
   Future<void> _launchWhatsApp() => _open('https://wa.me/918078633912');
 
@@ -364,6 +380,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               // buried behind a support email. Play requires an
                               // in-app route to deletion, and an exit somebody
                               // has to ask permission for is not an exit.
+                              ListTile(
+                                leading: const Icon(Icons.notifications_outlined, color: AppTheme.primaryLight),
+                                title: const Text('Enable notifications'),
+                                subtitle: const Text('Optional updates and replies from the community'),
+                                trailing: const Icon(Icons.chevron_right_rounded),
+                                onTap: _enableNotifications,
+                              ),
                               ListTile(
                                 contentPadding: EdgeInsets.zero,
                                 leading: const Icon(Icons.no_accounts_outlined, color: AppTheme.danger),

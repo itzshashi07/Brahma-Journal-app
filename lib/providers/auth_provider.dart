@@ -5,6 +5,7 @@ import '../services/auth_service.dart';
 import '../services/profile_service.dart';
 import '../models/user_profile.dart';
 import '../core/constants/app_constants.dart';
+import '../models/quick_reset.dart';
 
 class AuthProvider extends ChangeNotifier {
   final AuthService _authService;
@@ -87,6 +88,15 @@ class AuthProvider extends ChangeNotifier {
       if (user != null && wasSignedOut && !isFirstEvent) _justSignedIn = true;
 
       if (_user?.uid != user?.uid) {
+        // A guest draft may follow its author into sign-in; an account's draft
+        // must never be shown after sign-out or switching accounts.
+        if (QuickReset.pending?.ownerUid != null &&
+            QuickReset.pending?.ownerUid != user?.uid) {
+          QuickReset.pending = null;
+        }
+        if (user != null && QuickReset.pending?.ownerUid == null) {
+          QuickReset.pending?.ownerUid = user.uid;
+        }
         _profile = null;
         _isAdmin = false;
       }
@@ -236,8 +246,8 @@ class AuthProvider extends ChangeNotifier {
     required String email,
     required String password,
     required String name,
-    required int age,
-    required String gender,
+    required int? age,
+    required String? gender,
     required String phone,
     required String paymentId,
     String? subscriptionId,

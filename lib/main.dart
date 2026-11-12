@@ -45,6 +45,7 @@ import 'screens/counselling/counselling_inbox_screen.dart';
 import 'screens/legal/legal_screen.dart';
 import 'screens/settings/app_updates_screen.dart';
 import 'screens/onboarding/onboarding_screen.dart';
+import 'screens/reset/quick_reset_screen.dart';
 import 'screens/blogs/blogs_screen.dart';
 import 'screens/blogs/create_blog_screen.dart';
 import 'screens/blogs/blog_detail_screen.dart';
@@ -329,6 +330,7 @@ class _AppRouterState extends State<_AppRouter> {
       routes: [
         GoRoute(path: '/', builder: (ctx, _) => const SplashScreen()),
         GoRoute(path: '/welcome', builder: (ctx, _) => const WelcomeScreen()),
+        GoRoute(path: '/reset', builder: (ctx, _) => const QuickResetScreen()),
         GoRoute(path: '/login', builder: (ctx, _) => const LoginScreen()),
         GoRoute(path: '/signup', builder: (ctx, _) => const SignupScreen()),
         GoRoute(path: '/forgot-password', builder: (ctx, _) => const ForgotPasswordScreen()),

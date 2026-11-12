@@ -68,14 +68,14 @@ class WelcomeScreen extends StatelessWidget {
                                     ]),
                               ))),
                               const SizedBox(height: 28),
-                              const Text('LESS NOISE. MORE YOU.',
+                              const Text('TWO MINUTES. ONE NEXT STEP.',
                                   style: TextStyle(
                                       fontSize: 11,
                                       letterSpacing: 2,
                                       fontWeight: FontWeight.w600,
                                       color: Color(0xFFE7CDA5))),
                               const SizedBox(height: 14),
-                              const Text('Find a little\nroom to breathe.',
+                              const Text('A lot on\nyour mind?',
                                   style: TextStyle(
                                       fontSize: 38,
                                       height: 1.1,
@@ -84,7 +84,7 @@ class WelcomeScreen extends StatelessWidget {
                                       color: AppTheme.textPrimary)),
                               const SizedBox(height: 16),
                               const Text(
-                                  'A journal for your thoughts. A pause for your mind.\nA small practice that belongs to you.',
+                                  'Sort what is on your mind and choose one small next step. Try your first reset without an account.',
                                   style: TextStyle(
                                       fontSize: 16,
                                       height: 1.6,
@@ -106,16 +106,18 @@ class WelcomeScreen extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             SacredButton(
-                                label: 'Create your account',
+                                label: 'Try a 2-minute reset',
                                 icon: Icons.arrow_forward_rounded,
-                                onTap: () => context.push('/signup')),
+                                onTap: () => context.push('/reset')),
                             const SizedBox(height: 12),
                             SacredButton(
                                 label: 'Sign in',
                                 secondary: true,
                                 onTap: () => context.push('/login')),
                             const SizedBox(height: 16),
-                            const Text('Start small. Come as you are.',
+                            TextButton(onPressed: () => context.push('/signup'),
+                                child: const Text('Create an account')),
+                            const Text('Private reflection. No perfect streak required.',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                     fontSize: 13, color: AppTheme.textMuted)),

@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:brahma_app/models/user_profile.dart';
 import 'package:brahma_app/core/constants/app_constants.dart';
+import 'package:brahma_app/models/quick_reset.dart';
 import 'package:brahma_app/providers/auth_provider.dart' as app;
 import 'package:brahma_app/services/auth_service.dart';
 import 'package:brahma_app/services/profile_service.dart';
@@ -54,6 +55,24 @@ class TestUser extends Fake implements User {
 
 void main() {
   Future<void> flush() => Future<void>.delayed(Duration.zero);
+  test('guest reset binds to first sign-in and is erased on sign-out', () async {
+    final auth = TestAuth();
+    final provider = app.AuthProvider(authService: auth, profileService: TestProfile());
+    auth.events.add(null);
+    await flush();
+    QuickReset.pending = QuickReset()..thought = 'Private guest words';
+    auth.events.add(TestUser('first'));
+    await flush();
+    expect(QuickReset.pending?.ownerUid, 'first');
+    auth.events.add(null);
+    await flush();
+    expect(QuickReset.pending, isNull);
+    auth.events.add(TestUser('second'));
+    await flush();
+    expect(QuickReset.pending, isNull);
+    provider.dispose();
+    await auth.events.close();
+  });
   test('failed sign-in does not restart session initialization', () async {
     final auth = TestAuth();
     final provider =
